@@ -449,11 +449,12 @@ function GateAccessLauncher({ gates }: { gates: AppState["gates"] }) {
   const [link, setLink] = useState<string | null>(null);
   const [qr, setQr] = useState("");
   const [accessId, setAccessId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   async function generate() {
     const response = await requestAction({ action: "createGateAccess", gateId });
     if (!response.access) return;
     const url = `${window.location.origin}/scanner/${response.access.token}`;
-    setLink(url); setAccessId(response.access.id);
+    setLink(url); setAccessId(response.access.id); setCopied(false);
     const qrcode = await import("qrcode");
     setQr(await qrcode.toDataURL(url, { width: 480, margin: 2 }));
   }
@@ -461,7 +462,7 @@ function GateAccessLauncher({ gates }: { gates: AppState["gates"] }) {
     if (accessId) await requestAction({ action: "revokeGateAccess", accessId });
     setOpen(false); setLink(null); setQr(""); setAccessId(null);
   }
-  return <article className="panel production-note"><span>GATE DEVICE</span><h2>Share a restricted scanner</h2><p>Generate a QR code for a named gate. It works for 24 hours and never grants admin access.</p><button className="primary-button" onClick={() => setOpen(true)}>Generate 24-hour scanner QR</button>{open ? <div className="modal-backdrop"><div className="modal"><button className="drawer-close" onClick={() => setOpen(false)}>×</button><span className="eyebrow">Gate-only access</span><h2>{link ? "Scanner QR is ready" : "Choose a gate"}</h2>{link ? <><img src={qr} alt="QR code for the restricted scanner link" style={{ width: "min(280px, 100%)", display: "block", margin: "14px auto" }} /><p>Scan this on the gate device. The link expires in 24 hours and can be revoked here.</p><button className="danger-button" onClick={() => void revoke()}>Revoke scanner access</button></> : <><label className="role-switcher"><span>Operating gate</span><select value={gateId} onChange={(event) => setGateId(event.target.value)}>{gates.map((gate) => <option key={gate.id} value={gate.id}>{gate.name}</option>)}</select></label><div className="modal-actions"><button className="secondary-button" onClick={() => setOpen(false)}>Cancel</button><button className="primary-button" onClick={() => void generate()}>Generate QR</button></div></>}</div></div> : null}</article>;
+  return <article className="panel production-note"><span>GATE DEVICE</span><h2>Share a restricted scanner</h2><p>Generate a QR code for a named gate. It works for 24 hours and never grants admin access.</p><button className="primary-button" onClick={() => setOpen(true)}>Generate 24-hour scanner QR</button>{open ? <div className="modal-backdrop"><div className="modal"><button className="drawer-close" onClick={() => setOpen(false)}>×</button><span className="eyebrow">Gate-only access</span><h2>{link ? "Scanner QR is ready" : "Choose a gate"}</h2>{link ? <><img src={qr} alt="QR code for the restricted scanner link" style={{ width: "min(280px, 100%)", display: "block", margin: "14px auto" }} /><label className="scanner-link"><span>Scanner URL</span><input readOnly value={link} aria-label="Restricted scanner URL" /><button className="secondary-button" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); }}>{copied ? "✓ Copied" : "Copy URL"}</button></label><p>Scan or open this on the gate device. The link expires in 24 hours and can be revoked here.</p><button className="danger-button" onClick={() => void revoke()}>Revoke scanner access</button></> : <><label className="role-switcher"><span>Operating gate</span><select value={gateId} onChange={(event) => setGateId(event.target.value)}>{gates.map((gate) => <option key={gate.id} value={gate.id}>{gate.name}</option>)}</select></label><div className="modal-actions"><button className="secondary-button" onClick={() => setOpen(false)}>Cancel</button><button className="primary-button" onClick={() => void generate()}>Generate QR</button></div></>}</div></div> : null}</article>;
 }
 
 function TicketDrawer({ ticket, event, onClose, refresh, role }: { ticket: TicketRecord; event: AppState["event"]; onClose: () => void; refresh: () => Promise<void>; role: Role }) {
