@@ -1,9 +1,11 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import styles from "./login.module.css";
 
 export function LoginForm() {
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -23,7 +25,8 @@ export function LoginForm() {
       setSubmitting(false);
       return;
     }
-    window.location.assign("/");
+    router.push("/");
+    router.refresh();
   }
 
   return (

@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AppState, Role, TicketRecord } from "../../lib/types";
 import "./ndp.css";
 
@@ -50,6 +51,7 @@ function registerServiceWorker() {
 }
 
 export function NdpApp() {
+  const router = useRouter();
   const [state, setState] = useState<AppState | null>(null);
   const [view, setView] = useState<View>("overview");
   const [role, setRole] = useState<Role>("Super Admin");
@@ -60,7 +62,8 @@ export function NdpApp() {
 
   async function signOut() {
     await fetch("/api/session", { method: "DELETE" });
-    window.location.assign("/login");
+    router.push("/login");
+    router.refresh();
   }
 
   const load = useCallback(async () => {
@@ -146,7 +149,7 @@ export function NdpApp() {
           {view === "tickets" ? <Tickets state={state} refresh={load} onSelect={setSelectedTicket} role={role} /> : null}
           {view === "scanner" ? <Scanner state={state} refresh={load} /> : null}
           {view === "exceptions" ? <Exceptions state={state} refresh={load} role={role} /> : null}
-          {view === "events" ? <EventSetup state={state} /> : null}
+          {view === "events" ? <><EventSetup state={state} /><GateAccessLauncher gates={state.gates} /></> : null}
         </div>
       </main>
       {selectedTicket ? <TicketDrawer ticket={selectedTicket} event={state.event} onClose={() => setSelectedTicket(null)} refresh={load} role={role} /> : null}
@@ -262,6 +265,8 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   const [manualToken, setManualToken] = useState("");
   const [ticket, setTicket] = useState<TicketRecord | null>(null);
   const [quantity, setQuantity] = useState(1);
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const pack = (() => {
@@ -324,6 +329,7 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
     setResult(null);
     setTicket(selected);
     setQuantity(1);
+    setRequestId(crypto.randomUUID());
     controlsRef.current?.stop();
     setCameraActive(false);
   }
@@ -345,12 +351,19 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   }
 
   async function confirmAdmission() {
-    if (!ticket) return;
+    if (!ticket || submitting) return;
     if (online) {
-      const response = await requestAction({ action: "scan", token: ticket.token, quantity, gateId, mode: "online", operator: "Gate web scanner" }) as ScanResult;
-      setResult(response);
-      if (response.ok) setTicket(null);
-      await refresh();
+      setSubmitting(true);
+      try {
+        const response = await requestAction({ action: "scan", token: ticket.token, quantity, gateId, mode: "online", requestId: requestId ?? crypto.randomUUID(), operator: "Gate web scanner" }) as ScanResult;
+        setResult(response);
+        if (response.ok) setTicket(null);
+        await refresh();
+      } catch {
+        setResult({ ok: false, reason: "Scan could not be confirmed. Retry to safely check the same request." });
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
     const localTicket = pack?.tickets.find((item) => item.token === ticket.token);
@@ -386,7 +399,7 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
         </article>
 
         <aside className="scanner-side">
-          {ticket ? <AdmissionConfirm ticket={ticket} quantity={quantity} onQuantity={setQuantity} onConfirm={() => void confirmAdmission()} onCancel={() => setTicket(null)} /> : result ? <ResultCard result={result} onNext={() => setResult(null)} /> : <div className="panel empty-result"><span className="empty-icon">⌗</span><strong>Scan result appears here</strong><span>The operator will see a large allow or do-not-allow result.</span></div>}
+          {ticket ? <AdmissionConfirm ticket={ticket} quantity={quantity} busy={submitting} onQuantity={setQuantity} onConfirm={() => void confirmAdmission()} onCancel={() => setTicket(null)} /> : result ? <ResultCard result={result} onNext={() => setResult(null)} /> : <div className="panel empty-result"><span className="empty-icon">⌗</span><strong>Scan result appears here</strong><span>The operator will see a large allow or do-not-allow result.</span></div>}
           <article className="panel demo-tickets">
             <div className="panel-title"><div><span className="eyebrow">POC shortcuts</span><h2>Demo tickets</h2></div></div>
             {state.tickets.slice(0, 4).map((item) => <button key={item.id} onClick={() => selectToken(item.token)}><span className="zone-dot" style={{ background: item.zoneColour }} /><div><strong>{item.id}</strong><small>{item.remainingEntries} of {item.maxEntries} remaining</small></div><span>Scan ›</span></button>)}
@@ -398,9 +411,9 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   );
 }
 
-function AdmissionConfirm({ ticket, quantity, onQuantity, onConfirm, onCancel }: { ticket: TicketRecord; quantity: number; onQuantity: (value: number) => void; onConfirm: () => void; onCancel: () => void }) {
+function AdmissionConfirm({ ticket, quantity, busy, onQuantity, onConfirm, onCancel }: { ticket: TicketRecord; quantity: number; busy: boolean; onQuantity: (value: number) => void; onConfirm: () => void; onCancel: () => void }) {
   const max = Math.min(6, ticket.remainingEntries);
-  return <article className="panel admission-card"><div className="admission-header"><span className="valid-symbol">✓</span><div><span>VALID TICKET</span><strong>{ticket.id}</strong></div></div><div className="zone-banner" style={{ borderColor: ticket.zoneColour }}><span className="zone-dot" style={{ background: ticket.zoneColour }} /><div><small>Assigned zone</small><strong>{ticket.zoneName}</strong></div><span>Admit at this gate</span></div><div className="remaining-callout"><strong>{ticket.remainingEntries}</strong><span>admissions remaining</span></div><fieldset><legend>How many are entering now?</legend><div className="quantity-grid">{Array.from({ length: max }, (_, index) => index + 1).map((value) => <button key={value} className={quantity === value ? "selected" : ""} onClick={() => onQuantity(value)}>{value}</button>)}</div></fieldset><button className="allow-button" onClick={onConfirm}>Admit {quantity} {quantity === 1 ? "person" : "people"}</button><button className="text-button" onClick={onCancel}>Cancel</button></article>;
+  return <article className="panel admission-card"><div className="admission-header"><span className="valid-symbol">✓</span><div><span>VALID TICKET</span><strong>{ticket.id}</strong></div></div><div className="zone-banner" style={{ borderColor: ticket.zoneColour }}><span className="zone-dot" style={{ background: ticket.zoneColour }} /><div><small>Assigned zone</small><strong>{ticket.zoneName}</strong></div><span>Admit at this gate</span></div><div className="remaining-callout"><strong>{ticket.remainingEntries}</strong><span>admissions remaining</span></div><fieldset><legend>How many are entering now?</legend><div className="quantity-grid">{Array.from({ length: max }, (_, index) => index + 1).map((value) => <button key={value} disabled={busy} className={quantity === value ? "selected" : ""} onClick={() => onQuantity(value)}>{value}</button>)}</div></fieldset><button className="allow-button" disabled={busy} onClick={onConfirm}>{busy ? "Confirming admission…" : `Admit ${quantity} ${quantity === 1 ? "person" : "people"}`}</button><button className="text-button" disabled={busy} onClick={onCancel}>Cancel</button></article>;
 }
 
 function ResultCard({ result, onNext }: { result: ScanResult; onNext: () => void }) {
@@ -426,7 +439,29 @@ function Exceptions({ state, refresh, role }: { state: AppState; refresh: () => 
 }
 
 function EventSetup({ state }: { state: AppState }) {
-  return <section><PageHeading eyebrow="Event administration" title="Show configuration" subtitle="The POC uses one live rehearsal. The same structure supports all six NDP shows." action={<button className="primary-button">＋ Create event</button>} /><div className="setup-grid"><article className="panel event-summary"><div className="event-hero"><span className="eyebrow">Current event</span><h2>{state.event.name}</h2><p>{state.event.venue}</p><span className="healthy-badge">{state.event.status}</span></div><dl><div><dt>Maximum capacity</dt><dd>{compactNumber(state.event.capacity)}</dd></div><div><dt>Entry window</dt><dd>{state.event.entryWindowStart}–{state.event.entryWindowEnd}</dd></div><div><dt>Ticket policy</dt><dd>1–6 per e-ticket bundle</dd></div><div><dt>Re-entry</dt><dd>Not allowed</dd></div></dl><button className="secondary-button">Edit configuration</button></article><article className="panel"><div className="panel-title"><div><span className="eyebrow">Zones</span><h2>Four configurable zones</h2></div><button className="icon-button">＋</button></div><div className="setup-list">{state.zones.map((zone) => <div key={zone.id}><span className="zone-dot large" style={{ background: zone.colour }} /><div><strong>{zone.name} Zone</strong><span>{compactNumber(zone.capacity)} capacity</span></div><button>Configure</button></div>)}</div></article><article className="panel"><div className="panel-title"><div><span className="eyebrow">Entry points</span><h2>Gates accept every zone</h2></div><button className="icon-button">＋</button></div><div className="setup-list">{state.gates.map((gate) => <div key={gate.id}><span className="gate-symbol">⌗</span><div><strong>{gate.name}</strong><span>All zones · Online + offline</span></div><button>Configure</button></div>)}</div></article><article className="panel production-note"><span>POC</span><h2>Production dependencies</h2><ul><li>MINDEF-approved SSO</li><li>.gov.sg SMS connection</li><li>Apple and Google Wallet issuer credentials</li><li>Managed scanner device provisioning</li></ul></article></div></section>;
+  const [selection, setSelection] = useState<{ kind: "zone" | "gate"; name: string; detail: string } | null>(null);
+  return <section><PageHeading eyebrow="Event administration" title="Show configuration" subtitle="The POC uses one live rehearsal. The same structure supports all six NDP shows." /><div className="setup-grid"><article className="panel event-summary"><div className="event-hero"><span className="eyebrow">Current event</span><h2>{state.event.name}</h2><p>{state.event.venue}</p><span className="healthy-badge">{state.event.status}</span></div><dl><div><dt>Maximum capacity</dt><dd>{compactNumber(state.event.capacity)}</dd></div><div><dt>Entry window</dt><dd>{state.event.entryWindowStart}–{state.event.entryWindowEnd}</dd></div><div><dt>Ticket policy</dt><dd>1–6 per e-ticket bundle</dd></div><div><dt>Re-entry</dt><dd>Not allowed</dd></div></dl></article><article className="panel"><div className="panel-title"><div><span className="eyebrow">Zones</span><h2>Four configurable zones</h2></div></div><div className="setup-list">{state.zones.map((zone) => <div key={zone.id}><span className="zone-dot large" style={{ background: zone.colour }} /><div><strong>{zone.name} Zone</strong><span>{compactNumber(zone.capacity)} capacity</span></div><button onClick={() => setSelection({ kind: "zone", name: `${zone.name} Zone`, detail: `${compactNumber(zone.capacity)} admission capacity` })}>Configure</button></div>)}</div></article><article className="panel"><div className="panel-title"><div><span className="eyebrow">Entry points</span><h2>Gates accept every zone</h2></div></div><div className="setup-list">{state.gates.map((gate) => <div key={gate.id}><span className="gate-symbol">⌗</span><div><strong>{gate.name}</strong><span>All zones · Online + offline</span></div><button onClick={() => setSelection({ kind: "gate", name: gate.name, detail: "All zones · online admission validation" })}>Configure</button></div>)}</div></article><article className="panel production-note"><span>POC</span><h2>Production dependencies</h2><ul><li>MINDEF-approved SSO</li><li>.gov.sg SMS connection</li><li>Apple and Google Wallet issuer credentials</li><li>Managed scanner device provisioning</li></ul></article></div>{selection ? <div className="modal-backdrop"><div className="modal"><button className="drawer-close" onClick={() => setSelection(null)}>×</button><span className="eyebrow">{selection.kind} configuration</span><h2>{selection.name}</h2><p>{selection.detail}</p>{selection.kind === "gate" ? <p>Use the “Generate 24-hour scanner QR” panel below to issue this gate a restricted scanner link.</p> : <p>Zone capacity and colour are shown here. Editing event configuration is outside this POC.</p>}<div className="modal-actions"><button className="primary-button" onClick={() => setSelection(null)}>Done</button></div></div></div> : null}</section>;
+}
+
+function GateAccessLauncher({ gates }: { gates: AppState["gates"] }) {
+  const [open, setOpen] = useState(false);
+  const [gateId, setGateId] = useState(gates[0]?.id ?? "");
+  const [link, setLink] = useState<string | null>(null);
+  const [qr, setQr] = useState("");
+  const [accessId, setAccessId] = useState<string | null>(null);
+  async function generate() {
+    const response = await requestAction({ action: "createGateAccess", gateId });
+    if (!response.access) return;
+    const url = `${window.location.origin}/scanner/${response.access.token}`;
+    setLink(url); setAccessId(response.access.id);
+    const qrcode = await import("qrcode");
+    setQr(await qrcode.toDataURL(url, { width: 480, margin: 2 }));
+  }
+  async function revoke() {
+    if (accessId) await requestAction({ action: "revokeGateAccess", accessId });
+    setOpen(false); setLink(null); setQr(""); setAccessId(null);
+  }
+  return <article className="panel production-note"><span>GATE DEVICE</span><h2>Share a restricted scanner</h2><p>Generate a QR code for a named gate. It works for 24 hours and never grants admin access.</p><button className="primary-button" onClick={() => setOpen(true)}>Generate 24-hour scanner QR</button>{open ? <div className="modal-backdrop"><div className="modal"><button className="drawer-close" onClick={() => setOpen(false)}>×</button><span className="eyebrow">Gate-only access</span><h2>{link ? "Scanner QR is ready" : "Choose a gate"}</h2>{link ? <><img src={qr} alt="QR code for the restricted scanner link" style={{ width: "min(280px, 100%)", display: "block", margin: "14px auto" }} /><p>Scan this on the gate device. The link expires in 24 hours and can be revoked here.</p><button className="danger-button" onClick={() => void revoke()}>Revoke scanner access</button></> : <><label className="role-switcher"><span>Operating gate</span><select value={gateId} onChange={(event) => setGateId(event.target.value)}>{gates.map((gate) => <option key={gate.id} value={gate.id}>{gate.name}</option>)}</select></label><div className="modal-actions"><button className="secondary-button" onClick={() => setOpen(false)}>Cancel</button><button className="primary-button" onClick={() => void generate()}>Generate QR</button></div></>}</div></div> : null}</article>;
 }
 
 function TicketDrawer({ ticket, event, onClose, refresh, role }: { ticket: TicketRecord; event: AppState["event"]; onClose: () => void; refresh: () => Promise<void>; role: Role }) {

@@ -46,6 +46,14 @@ const schemaStatements = [
     fingerprint text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
   )`,
+  `CREATE TABLE IF NOT EXISTS gate_access_links (
+    id text PRIMARY KEY,
+    gate_id text NOT NULL REFERENCES gates(id) ON DELETE CASCADE,
+    token_hash text NOT NULL UNIQUE,
+    expires_at timestamptz NOT NULL,
+    revoked_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+  )`,
   `CREATE TABLE IF NOT EXISTS scans (
     id text PRIMARY KEY REFERENCES scan_requests(id),
     ticket_id text NOT NULL REFERENCES tickets(id),
@@ -73,6 +81,7 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS tickets_nric_hash_idx ON tickets(nric_hash)`,
   `CREATE INDEX IF NOT EXISTS tickets_zone_id_idx ON tickets(zone_id)`,
   `CREATE INDEX IF NOT EXISTS scan_requests_created_idx ON scan_requests(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS gate_access_links_gate_id_idx ON gate_access_links(gate_id)`,
   `CREATE INDEX IF NOT EXISTS scans_event_created_idx ON scans(event_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS scans_ticket_id_idx ON scans(ticket_id)`,
   `CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC)`,
@@ -269,6 +278,53 @@ export async function consumeTicket(input: ScanInput) {
   const existing = await sql.query(EXISTING_SCAN_SQL, [scanId, fingerprint]) as ScanResultRow[];
   if (existing[0]) return scanResponse(existing[0]);
   return { ok: false, reason: "Ticket is invalid, inactive, or not valid for this gate" };
+}
+
+function gateAccessTokenHash(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export async function createGateAccessLink(gateId: string, actor: string) {
+  await ensureSeeded();
+  const token = randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
+  const id = randomUUID();
+  const rows = await getSql().query(`
+    WITH inserted AS (
+      INSERT INTO gate_access_links (id, gate_id, token_hash, expires_at)
+      SELECT $1, g.id, $2, now() + interval '24 hours' FROM gates g
+      WHERE g.id = $3 AND g.event_id = $4
+      RETURNING expires_at
+    ), audited AS (
+      INSERT INTO audit_events (id, action, actor, subject_id, detail)
+      SELECT $5, 'gate_access.created', $6, $1, '24-hour scanner access' FROM inserted
+    )
+    SELECT expires_at::text AS "expiresAt" FROM inserted
+  `, [id, gateAccessTokenHash(token), gateId, EVENT_ID, randomUUID(), actor]) as Array<{ expiresAt: string }>;
+  return rows[0] ? { id, token, gateId, expiresAt: rows[0].expiresAt } : null;
+}
+
+export async function getGateAccess(token: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`
+    SELECT a.id, a.gate_id AS "gateId", g.name AS "gateName", a.expires_at::text AS "expiresAt"
+    FROM gate_access_links a JOIN gates g ON g.id = a.gate_id
+    WHERE a.token_hash = $1 AND a.revoked_at IS NULL AND a.expires_at > now()
+    LIMIT 1
+  `, [gateAccessTokenHash(token)]) as Array<{ id: string; gateId: string; gateName: string; expiresAt: string }>;
+  return rows[0] ?? null;
+}
+
+export async function revokeGateAccessLink(id: string, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`
+    WITH updated AS (
+      UPDATE gate_access_links SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING id
+    ), audited AS (
+      INSERT INTO audit_events (id, action, actor, subject_id, detail)
+      SELECT $2, 'gate_access.revoked', $3, id, 'Scanner access revoked' FROM updated
+    ) SELECT id FROM updated
+  `, [id, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
 }
 
 export async function regenerateTicket(ticketId: string, expectedVersion: number, actor: string) {

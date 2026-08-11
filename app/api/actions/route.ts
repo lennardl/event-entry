@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../db";
 import { isAuthenticatedRequest, isSameOriginRequest } from "../../../lib/auth";
-import { consumeTicket, findTicketsByNric, importTickets, regenerateTicket } from "../../../lib/store";
+import { consumeTicket, createGateAccessLink, findTicketsByNric, importTickets, regenerateTicket, revokeGateAccessLink } from "../../../lib/store";
 
 const scanSchema = z.object({
   action: z.literal("scan"),
@@ -36,7 +36,10 @@ const importSchema = z.object({
   message: "An import can create at most 5,000 ticket records",
 });
 
-const actionSchema = z.discriminatedUnion("action", [scanSchema, lookupSchema, regenerateSchema, importSchema]);
+const createGateAccessSchema = z.object({ action: z.literal("createGateAccess"), gateId: z.string().trim().min(1).max(80) });
+const revokeGateAccessSchema = z.object({ action: z.literal("revokeGateAccess"), accessId: z.string().uuid() });
+
+const actionSchema = z.discriminatedUnion("action", [scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema]);
 
 function json(data: unknown, init?: ResponseInit) {
   const response = Response.json(data, init);
@@ -68,6 +71,10 @@ export async function POST(request: Request) {
         return json({ result: await regenerateTicket(body.ticketId, body.expectedVersion, operator) });
       case "import":
         return json(await importTickets(body.rows, operator));
+      case "createGateAccess":
+        return json({ access: await createGateAccessLink(body.gateId, operator) });
+      case "revokeGateAccess":
+        return json({ revoked: await revokeGateAccessLink(body.accessId, operator) });
     }
   } catch (error) {
     console.error("Action request failed", error);
