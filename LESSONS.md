@@ -2,3 +2,5 @@
 [/design-review] 2026-08-11 result: Completed a code-and-flow audit; live browser capture was unavailable in this workspace, so viewport and rendered contrast findings remain validation work.
 [/browse] 2026-08-11 input: Design-review required cross-viewport browser inspection of the local app.
 [/browse] 2026-08-11 result: Local dev server could start only transiently and no Playwright browser MCP tool was available; used source-level flow inspection instead.
+[/design-review] 2026-08-11 input: Re-audit after restructuring Event Setup into readiness-focused modules.
+[/design-review] 2026-08-11 result: Consolidated Event Setup content and hierarchy; automated build and lint pass, while live viewport capture remains unavailable.

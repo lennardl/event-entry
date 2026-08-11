@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { EventRecord } from "../../lib/types";
 import "./citizen.css";
 import "./citizen-extra.css";
+import { useQrCode } from "./useQrCode";
 
 type Ticket = { id: string; zoneName: string; zoneColour: string; maxEntries: number; remainingEntries: number; version: number; token: string };
 type TicketResponse = { ticket: Ticket; event: EventRecord };
@@ -11,8 +12,9 @@ const REFRESH_MS = 10_000;
 const load = async (token: string): Promise<TicketResponse> => { const response = await fetch(`/api/ticket/${encodeURIComponent(token)}`, { cache: "no-store" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); return data; };
 
 export function CitizenTicket({ token }: { token: string }) {
-  const [ticket, setTicket] = useState<Ticket | null>(null); const [event, setEvent] = useState<EventRecord | null>(null); const [qr, setQr] = useState(""); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { Promise.all([load(token), import("qrcode")]).then(async ([data, qrcode]) => { setTicket(data.ticket); setEvent(data.event); setQr(await qrcode.toDataURL(data.ticket.token, { width: 520, margin: 2, color: { dark: "#17213A", light: "#FFFFFF" } })); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Ticket could not be opened")); }, [token]);
+  const [ticket, setTicket] = useState<Ticket | null>(null); const [event, setEvent] = useState<EventRecord | null>(null); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
+  const qr = useQrCode(ticket?.token ?? "", 520);
+  useEffect(() => { load(token).then((data) => { setTicket(data.ticket); setEvent(data.event); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Ticket could not be opened")); }, [token]);
   useEffect(() => { if (!ticket) return; let previous = ticket.remainingEntries; const refresh = async () => { if (document.visibilityState !== "visible") return; try { const data = await load(token); if (data.ticket.remainingEntries < previous) { const used = previous - data.ticket.remainingEntries; setNotice(`Entry confirmed — ${used} admission${used === 1 ? "" : "s"} used. ${data.ticket.remainingEntries} remaining.`); } previous = data.ticket.remainingEntries; setTicket(data.ticket); setEvent(data.event); } catch { /* Keep the ticket visible during a transient failure. */ } }; const interval = window.setInterval(() => void refresh(), REFRESH_MS); document.addEventListener("visibilitychange", refresh); return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", refresh); }; }, [ticket, token]);
   if (error) return <main className="citizen-page"><div className="ticket-error"><strong>Ticket unavailable</strong><span>{error}</span></div></main>;
   if (!ticket || !event) return <main className="citizen-page"><div className="ticket-loading">Opening your event ticket…</div></main>;

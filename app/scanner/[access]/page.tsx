@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { readStored, writeStored } from "../../../lib/browser-storage";
 
 type Access = { gateName: string; expiresAt: string };
 type Result = { ok: boolean; reason?: string; quantity?: number; remaining?: number; zoneName?: string; offline?: boolean };
@@ -26,14 +27,14 @@ export default function GateScannerPage({ params }: { params: Promise<{ access: 
   const storageKey = `${PACK_PREFIX}${accessToken}`;
   const pendingKey = `${PENDING_PREFIX}${accessToken}`;
 
-  function readPack(): OfflinePack | null { if (typeof window === "undefined") return null; try { return JSON.parse(localStorage.getItem(storageKey) || "null") as OfflinePack | null; } catch { return null; } }
-  function readPending(): PendingScan[] { if (typeof window === "undefined") return []; try { return JSON.parse(localStorage.getItem(pendingKey) || "[]") as PendingScan[]; } catch { return []; } }
-  function writePending(items: PendingScan[]) { localStorage.setItem(pendingKey, JSON.stringify(items)); setPendingCount(items.length); }
+  function readPack() { return readStored<OfflinePack | null>(storageKey, null); }
+  function readPending() { return readStored<PendingScan[]>(pendingKey, []); }
+  function writePending(items: PendingScan[]) { writeStored(pendingKey, items); setPendingCount(items.length); }
   async function downloadPack() {
     const response = await fetch(`/api/scanner/pack?access=${encodeURIComponent(accessToken)}`, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
-    localStorage.setItem(storageKey, JSON.stringify(data));
+    writeStored(storageKey, data);
   }
   async function submit(item: PendingScan) {
     const response = await fetch("/api/scanner/scan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ access: accessToken, token: item.token, quantity: item.quantity, requestId: item.requestId }) });
@@ -64,7 +65,7 @@ export default function GateScannerPage({ params }: { params: Promise<{ access: 
     if (!ticket || ticket.status !== "active") throw new Error("Ticket is not valid in this device’s offline pack");
     if (ticket.remainingEntries < quantity) throw new Error(`Only ${ticket.remainingEntries} admission${ticket.remainingEntries === 1 ? "" : "s"} remain on this ticket`);
     ticket.remainingEntries -= quantity;
-    localStorage.setItem(storageKey, JSON.stringify(pack));
+    writeStored(storageKey, pack);
     writePending([...readPending(), { requestId, token: ticketToken, quantity }]);
     setResult({ ok: true, offline: true, quantity, remaining: ticket.remainingEntries, zoneName: ticket.zoneName });
     setTicketToken("");
@@ -97,7 +98,7 @@ export default function GateScannerPage({ params }: { params: Promise<{ access: 
       if (!online) { admitOffline(requestId); return; }
       const response = await submit({ requestId, token: ticketToken, quantity });
       setResult(response); navigator.vibrate?.(response.ok ? [60, 40, 90] : [180, 80, 180]);
-      if (response.ok) { const pack = readPack(); const ticket = pack?.tickets.find((item) => item.token === ticketToken); if (ticket) { ticket.remainingEntries = response.remaining ?? ticket.remainingEntries; localStorage.setItem(storageKey, JSON.stringify(pack)); } setTicketToken(""); }
+      if (response.ok) { const pack = readPack(); const ticket = pack?.tickets.find((item) => item.token === ticketToken); if (ticket) { ticket.remainingEntries = response.remaining ?? ticket.remainingEntries; writeStored(storageKey, pack); } setTicketToken(""); }
     } catch (reason) {
       try { admitOffline(requestId); setOnline(false); } catch (offlineReason) { setError(offlineReason instanceof Error ? offlineReason.message : (reason instanceof Error ? reason.message : "Scan failed")); }
     } finally { setBusy(false); }
