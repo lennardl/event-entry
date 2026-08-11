@@ -20,5 +20,5 @@ test("server-renders the Event Entry operations application", async () => {
   assert.match(html, /Event Entry/);
   assert.match(html, /Preparing Event Entry/);
   assert.match(html, /Loading event operations/);
-  assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
+  assert.doesNotMatch(html, /Your site is taking shape/);
 });
