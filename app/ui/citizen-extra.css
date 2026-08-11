@@ -1,0 +1,1 @@
+.ticket-state,.wallet-unavailable{margin:0 0 12px;padding:12px 14px;border-radius:12px;font-size:13px;font-weight:800}.ticket-state.ready{color:#075f45;background:#eafaf4}.ticket-state.used{color:#9f0d21;background:#fff0f2}.wallet-unavailable{display:grid;gap:4px;color:#4a5568;background:#eef2f7}.wallet-unavailable span{font-size:11px;font-weight:500}

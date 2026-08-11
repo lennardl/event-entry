@@ -417,7 +417,13 @@ function AdmissionConfirm({ ticket, quantity, busy, onQuantity, onConfirm, onCan
 }
 
 function ResultCard({ result, onNext }: { result: ScanResult; onNext: () => void }) {
-  return <article className={`result-card ${result.ok ? "allowed" : "denied"}`}><div className="result-symbol">{result.ok ? "✓" : "×"}</div><span>{result.ok ? "ALLOW ENTRY" : "DO NOT ALLOW"}</span><h2>{result.ok ? `Admit ${result.quantity}` : result.reason}</h2>{result.ok ? <><div className="result-zone">Direct to <strong>{result.zoneName} Zone</strong></div><p>{result.remaining} admission{result.remaining === 1 ? "" : "s"} remaining on this ticket</p></> : <p>Move the attendee to the exception queue if they need help.</p>}<button onClick={onNext}>Scan next ticket</button></article>;
+  useEffect(() => {
+    navigator.vibrate?.(result.ok ? [60, 40, 90] : [180, 80, 180]);
+    const audio = new AudioContext(); const oscillator = audio.createOscillator(); const gain = audio.createGain();
+    oscillator.frequency.value = result.ok ? 880 : 220; gain.gain.value = .05; oscillator.connect(gain).connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + .14);
+    return () => { oscillator.disconnect(); gain.disconnect(); void audio.close(); };
+  }, [result]);
+  return <article className={`result-card ${result.ok ? "allowed" : "denied"}`} role="status" aria-live="assertive"><div className="result-symbol">{result.ok ? "✓" : "×"}</div><span>{result.ok ? "ALLOW ENTRY" : "DO NOT ALLOW"}</span><h2>{result.ok ? `Admit ${result.quantity}` : result.reason}</h2>{result.ok ? <><div className="result-zone">Direct to <strong>{result.zoneName} Zone</strong></div><p>{result.remaining} admission{result.remaining === 1 ? "" : "s"} remaining on this ticket</p></> : <p>Move the attendee to the exception queue if they need help.</p>}<button onClick={onNext}>Scan next ticket</button></article>;
 }
 
 function Exceptions({ state, refresh, role }: { state: AppState; refresh: () => Promise<void>; role: Role }) {
