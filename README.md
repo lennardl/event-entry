@@ -1,6 +1,7 @@
-# NDP Entry POC
+# Event Entry POC
 
-A browser-based e-ticketing and gate-operations proof of concept for NDP 2027.
+A reusable browser-based e-ticketing and gate-operations proof of concept. NDP
+2027 remains the included sample event.
 
 ## Included
 

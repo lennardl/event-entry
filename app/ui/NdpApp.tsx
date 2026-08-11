@@ -96,7 +96,7 @@ export function NdpApp() {
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand-block">
           <div className="brand-mark"><span>SG</span><small>60+</small></div>
-          <div><strong>NDP Entry</strong><span>Operations control</span></div>
+          <div><strong>Event Entry</strong><span>Operations control</span></div>
         </div>
         <nav aria-label="Primary navigation">
           {navItems.map((item) => {
@@ -152,7 +152,7 @@ export function NdpApp() {
 }
 
 function LoadingScreen() {
-  return <div className="loading-screen"><div className="pulse-logo">SG</div><strong>Preparing NDP Entry</strong><span>Loading event operations…</span></div>;
+  return <div className="loading-screen"><div className="pulse-logo">SG</div><strong>Preparing Event Entry</strong><span>Loading event operations…</span></div>;
 }
 
 function ErrorScreen({ message, retry }: { message: string; retry: () => Promise<void> }) {

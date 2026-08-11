@@ -12,13 +12,13 @@ async function render(path = "/") {
   );
 }
 
-test("server-renders the NDP operations application", async () => {
+test("server-renders the Event Entry operations application", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /NDP Entry/);
-  assert.match(html, /Preparing NDP Entry/);
+  assert.match(html, /Event Entry/);
+  assert.match(html, /Preparing Event Entry/);
   assert.match(html, /Loading event operations/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });

@@ -19,19 +19,19 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const socialImage = `${protocol}://${host}/og.png`;
   return {
-    title: "NDP Entry",
-    description: "Fast, resilient event entry operations for NDP 2027.",
+    title: "Event Entry",
+    description: "Fast, resilient ticketing and gate operations for configurable events.",
     manifest: "/manifest.webmanifest",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
     openGraph: {
-      title: "NDP Entry",
+      title: "Event Entry",
       description: "Fast, resilient entry operations",
       type: "website",
-      images: [{ url: socialImage, width: 1733, height: 907, alt: "NDP Entry — Fast, resilient entry operations" }],
+      images: [{ url: socialImage, width: 1733, height: 907, alt: "Event Entry — Fast, resilient entry operations" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "NDP Entry",
+      title: "Event Entry",
       description: "Fast, resilient entry operations",
       images: [socialImage],
     },

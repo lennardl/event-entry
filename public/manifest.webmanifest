@@ -1,7 +1,7 @@
 {
-  "name": "NDP Entry Operations",
-  "short_name": "NDP Entry",
-  "description": "Fast, resilient ticket validation for NDP operations.",
+  "name": "Event Entry Operations",
+  "short_name": "Event Entry",
+  "description": "Fast, resilient ticket validation for event operations.",
   "start_url": "/?view=scanner",
   "display": "standalone",
   "background_color": "#f5f7fb",
