@@ -1,0 +1,10 @@
+{
+  "name": "NDP Entry Operations",
+  "short_name": "NDP Entry",
+  "description": "Fast, resilient ticket validation for NDP operations.",
+  "start_url": "/?view=scanner",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#dc162f",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
