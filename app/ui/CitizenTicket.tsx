@@ -2,11 +2,21 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useState } from "react";
-import type { EventRecord, TicketRecord } from "../../lib/types";
+import type { EventRecord } from "../../lib/types";
 import "./citizen.css";
 
+type CitizenTicketRecord = {
+  id: string;
+  zoneName: string;
+  zoneColour: string;
+  maxEntries: number;
+  remainingEntries: number;
+  version: number;
+  token: string;
+};
+
 export function CitizenTicket({ token }: { token: string }) {
-  const [ticket, setTicket] = useState<TicketRecord | null>(null);
+  const [ticket, setTicket] = useState<CitizenTicketRecord | null>(null);
   const [event, setEvent] = useState<EventRecord | null>(null);
   const [qr, setQr] = useState("");
   const [error, setError] = useState<string | null>(null);

@@ -13,6 +13,7 @@
   --amber: #b65d08;
   --blue: #1769aa;
   --shadow: 0 16px 42px rgba(23, 33, 58, 0.08);
+  --font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono";
 }
 
 * { box-sizing: border-box; }

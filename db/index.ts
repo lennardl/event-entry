@@ -1,13 +1,23 @@
-import { env } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
-import * as schema from "./schema";
+import { neon } from "@neondatabase/serverless";
 
-export function getDb() {
-  if (!env.DB) {
-    throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Configure the binding before using the database."
-    );
+let client: ReturnType<typeof neon> | null = null;
+
+export class DatabaseConfigurationError extends Error {
+  constructor() {
+    super("Database is not configured. Connect a Neon Postgres database and set DATABASE_URL.");
+    this.name = "DatabaseConfigurationError";
   }
+}
 
-  return drizzle(env.DB, { schema });
+export function isDatabaseConfigured() {
+  return Boolean(process.env.DATABASE_URL);
+}
+
+export function getSql() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new DatabaseConfigurationError();
+  client ??= neon(connectionString, {
+    fetchOptions: { cache: "no-store" },
+  });
+  return client;
 }

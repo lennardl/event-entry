@@ -1,0 +1,96 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at top, #f8dce1, #f5f7fb 44%);
+  color: #17213a;
+}
+
+.card {
+  width: min(100%, 420px);
+  padding: 36px;
+  border: 1px solid #e4e7ec;
+  border-radius: 20px;
+  background: white;
+  box-shadow: 0 24px 70px rgba(23, 33, 58, 0.12);
+}
+
+.mark {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 28px;
+  border-radius: 16px;
+  background: #dc162f;
+  color: white;
+  font-weight: 800;
+}
+
+.eyebrow {
+  color: #dc162f;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.card h1 {
+  margin: 8px 0;
+  font-size: 32px;
+}
+
+.card p {
+  margin: 0 0 28px;
+  color: #667085;
+  line-height: 1.55;
+}
+
+.form {
+  display: grid;
+  gap: 10px;
+}
+
+.form label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.form input {
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid #cfd4dc;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.form input:focus {
+  border-color: #dc162f;
+  outline: 3px solid rgba(220, 22, 47, 0.12);
+}
+
+.form button {
+  height: 48px;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: #dc162f;
+  color: white;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.form button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #b42318;
+  font-size: 14px;
+}

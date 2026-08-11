@@ -9,6 +9,10 @@ type View = "overview" | "tickets" | "scanner" | "exceptions" | "events";
 type ScanResult = { ok: boolean; reason?: string; ticketId?: string; zoneName?: string; quantity?: number; remaining?: number };
 type PendingScan = { id: string; token: string; quantity: number; gateId: string; createdAt: string };
 
+const OFFLINE_PACK_KEY = "event-entry-offline-pack:v1";
+const PENDING_SCANS_KEY = "event-entry-pending-scans:v1";
+const OFFLINE_PACK_LIFETIME_MS = 4 * 60 * 60 * 1000;
+
 const roles: Role[] = ["Super Admin", "Admin", "Gate Supervisor", "Command Centre Viewer"];
 const viewAccess: Record<View, Role[]> = {
   overview: roles,
@@ -54,6 +58,11 @@ export function NdpApp() {
   const [selectedTicket, setSelectedTicket] = useState<TicketRecord | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  async function signOut() {
+    await fetch("/api/session", { method: "DELETE" });
+    window.location.assign("/login");
+  }
+
   const load = useCallback(async () => {
     try {
       const response = await fetch("/api/state", { cache: "no-store" });
@@ -74,12 +83,6 @@ export function NdpApp() {
     if (queryView && navItems.some((item) => item.id === queryView)) queueMicrotask(() => setView(queryView));
     queueMicrotask(() => void load());
   }, [load]);
-
-  useEffect(() => {
-    if (state) {
-      localStorage.setItem("ndp-offline-pack", JSON.stringify({ updatedAt: new Date().toISOString(), eventId: state.event.id, tickets: state.tickets.map((ticket) => ({ token: ticket.token, id: ticket.id, zoneName: ticket.zoneName, zoneColour: ticket.zoneColour, remainingEntries: ticket.remainingEntries, status: ticket.status })) }));
-    }
-  }, [state]);
 
   function navigate(next: View) {
     if (!viewAccess[next].includes(role)) return;
@@ -134,7 +137,7 @@ export function NdpApp() {
                 {roles.map((item) => <option key={item}>{item}</option>)}
               </select>
             </label>
-            <div className="avatar" aria-label="Signed in as MINDEF operations">MO</div>
+            <button className="avatar" aria-label="Sign out" title="Sign out" onClick={() => void signOut()}>MO</button>
           </div>
         </header>
 
@@ -263,10 +266,25 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const pack = (() => {
     if (typeof window === "undefined") return null;
-    try { return JSON.parse(localStorage.getItem("ndp-offline-pack") || "null") as { updatedAt: string; tickets: Array<{ token: string; id: string; zoneName: string; zoneColour: string; remainingEntries: number; status: string }> } | null; } catch { return null; }
+    try { return JSON.parse(localStorage.getItem(OFFLINE_PACK_KEY) || "null") as { updatedAt: string; expiresAt: string; tickets: Array<{ token: string; id: string; zoneName: string; zoneColour: string; remainingEntries: number; status: string }> } | null; } catch { return null; }
   })();
 
-  const pendingCount = typeof window === "undefined" ? 0 : (() => { try { return (JSON.parse(localStorage.getItem("ndp-pending-scans") || "[]") as PendingScan[]).length; } catch { return 0; } })();
+  const pendingCount = typeof window === "undefined" ? 0 : (() => { try { return (JSON.parse(localStorage.getItem(PENDING_SCANS_KEY) || "[]") as PendingScan[]).length; } catch { return 0; } })();
+
+  useEffect(() => {
+    if (!navigator.onLine) return;
+    const now = new Date();
+    try {
+      localStorage.setItem(OFFLINE_PACK_KEY, JSON.stringify({
+        updatedAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + OFFLINE_PACK_LIFETIME_MS).toISOString(),
+        eventId: state.event.id,
+        tickets: state.tickets.map((item) => ({ token: item.token, id: item.id, zoneName: item.zoneName, zoneColour: item.zoneColour, remainingEntries: item.remainingEntries, status: item.status })),
+      }));
+      localStorage.removeItem("ndp-offline-pack");
+      localStorage.removeItem("ndp-pending-scans");
+    } catch { /* Browser storage may be unavailable on restricted devices. */ }
+  }, [state]);
 
   useEffect(() => {
     const onOnline = () => setOnline(true);
@@ -279,7 +297,7 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   const syncPending = useCallback(async () => {
     if (!navigator.onLine) return;
     let pending: PendingScan[] = [];
-    try { pending = JSON.parse(localStorage.getItem("ndp-pending-scans") || "[]") as PendingScan[]; } catch { return; }
+    try { pending = JSON.parse(localStorage.getItem(PENDING_SCANS_KEY) || "[]") as PendingScan[]; } catch { return; }
     if (!pending.length) return;
     setSyncMessage(`Syncing ${pending.length} offline scan${pending.length === 1 ? "" : "s"}…`);
     const unresolved: PendingScan[] = [];
@@ -289,7 +307,7 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
         if (!response.ok) unresolved.push(item);
       } catch { unresolved.push(item); }
     }
-    localStorage.setItem("ndp-pending-scans", JSON.stringify(unresolved));
+    localStorage.setItem(PENDING_SCANS_KEY, JSON.stringify(unresolved));
     setSyncMessage(unresolved.length ? `${unresolved.length} scan conflict${unresolved.length === 1 ? "" : "s"} need review` : "Offline scans synchronised");
     await refresh();
   }, [refresh]);
@@ -336,14 +354,17 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
       return;
     }
     const localTicket = pack?.tickets.find((item) => item.token === ticket.token);
+    // This check runs only after the operator confirms an offline admission.
+    // eslint-disable-next-line react-hooks/purity
+    if (!pack?.expiresAt || Date.parse(pack.expiresAt) <= Date.now()) { setResult({ ok: false, reason: "Offline pack has expired. Move the attendee to the exception queue." }); return; }
     if (!localTicket || localTicket.status !== "active") { setResult({ ok: false, reason: "Ticket is not valid in this offline pack" }); return; }
     if (quantity > localTicket.remainingEntries) { setResult({ ok: false, reason: `Only ${localTicket.remainingEntries} admission${localTicket.remainingEntries === 1 ? "" : "s"} remaining on this device` }); return; }
     localTicket.remainingEntries -= quantity;
     const storedPack = { ...pack, tickets: pack?.tickets || [] };
-    localStorage.setItem("ndp-offline-pack", JSON.stringify(storedPack));
-    const queued: PendingScan[] = JSON.parse(localStorage.getItem("ndp-pending-scans") || "[]");
+    localStorage.setItem(OFFLINE_PACK_KEY, JSON.stringify(storedPack));
+    const queued: PendingScan[] = JSON.parse(localStorage.getItem(PENDING_SCANS_KEY) || "[]");
     queued.push({ id: crypto.randomUUID(), token: ticket.token, quantity, gateId, createdAt: new Date().toISOString() });
-    localStorage.setItem("ndp-pending-scans", JSON.stringify(queued));
+    localStorage.setItem(PENDING_SCANS_KEY, JSON.stringify(queued));
     setResult({ ok: true, ticketId: ticket.id, zoneName: ticket.zoneName, quantity, remaining: localTicket.remainingEntries });
     setTicket(null);
   }
@@ -414,8 +435,9 @@ function TicketDrawer({ ticket, event, onClose, refresh, role }: { ticket: Ticke
   const [copied, setCopied] = useState(false);
   useEffect(() => { import("qrcode").then((module) => module.toDataURL(current.token, { width: 420, margin: 2, color: { dark: "#17213A", light: "#FFFFFF" } })).then(setQr); }, [current.token]);
   async function regenerate() {
-    const response = await requestAction({ action: "regenerate", ticketId: current.id, actor: role });
-    if (response.result) { setCurrent({ ...current, token: response.result.token, version: response.result.version }); await refresh(); }
+    const response = await requestAction({ action: "regenerate", ticketId: current.id, expectedVersion: current.version, actor: role });
+    if (response.result) setCurrent({ ...current, token: response.result.token, version: response.result.version });
+    await refresh();
   }
   const link = typeof window === "undefined" ? "" : `${window.location.origin}/ticket/${encodeURIComponent(current.token)}`;
   return <div className="drawer-backdrop" role="button" tabIndex={0} aria-label="Close ticket details" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="ticket-drawer"><button className="drawer-close" onClick={onClose} aria-label="Close ticket">×</button><div className="citizen-ticket" style={{ "--ticket-zone": current.zoneColour } as React.CSSProperties}><div className="ticket-brand"><div className="brand-mark small"><span>SG</span><small>60+</small></div><div><strong>NDP 2027</strong><span>Official admission ticket</span></div></div><div className="ticket-zone"><span>{current.zoneName}</span><strong>ZONE</strong></div><div className="ticket-event"><span>{event.name}</span><h2>{event.venue}</h2><div><span>Entry window</span><strong>{event.entryWindowStart}–{event.entryWindowEnd}</strong></div></div><div className="qr-wrap">{qr ? <img src={qr} alt={`QR code for ${current.id}`} /> : <span>Generating QR…</span>}</div><div className="ticket-count"><strong>{current.remainingEntries}</strong><span>of {current.maxEntries} admissions remaining</span></div><div className="ticket-id">{current.id} · Version {current.version}</div></div><div className="drawer-actions"><a className="wallet-button apple" href={`/api/wallet/apple?ticket=${current.id}`}><span></span><small>Add to</small><strong>Apple Wallet</strong></a><a className="wallet-button google" href={`/api/wallet/google?ticket=${current.id}`}><span>G</span><small>Save to</small><strong>Google Wallet</strong></a><button className="secondary-button full" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); }}>{copied ? "✓ Link copied" : "Copy ticket link"}</button><button className="danger-button" onClick={() => void regenerate()}>Regenerate lost ticket</button><small className="drawer-help">Regenerating immediately invalidates the previous QR while preserving admissions already used.</small></div></aside></div>;
