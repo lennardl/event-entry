@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../db";
-import { isAuthenticatedRequest, isSameOriginRequest } from "../../../lib/auth";
-import { consumeTicket, createEvent, createGate, createGateAccessLink, createZone, deleteGate, deleteZone, duplicateEvent, findTicketsByNric, importTickets, regenerateTicket, revokeAllGateAccess, revokeGateAccessLink, setEventStatus, updateEvent, updateGate, updateTicketPolicy, updateTicketTheme, updateZone } from "../../../lib/store";
+import { authenticatedRole, isSameOriginRequest } from "../../../lib/auth";
+import { consumeTicket, createEvent, createGate, createGateAccessLink, createZone, deleteGate, deleteZone, duplicateEvent, findTicketsByNric, importTickets, regenerateTicket, restoreEvent, revokeAllGateAccess, revokeGateAccessLink, setEventStatus, softDeleteEvent, updateEvent, updateGate, updateTicketPolicy, updateTicketTheme, updateZone } from "../../../lib/store";
 
 const eventIdSchema = z.string().trim().min(1).max(80).regex(/^evt-[a-zA-Z0-9-]+$/);
 
@@ -63,7 +63,7 @@ const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const timeZoneSchema = z.string().trim().min(3).max(64).refine((value) => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } }, "Unknown IANA time zone");
 const scheduleFields = { startDate: dateSchema, endDate: dateSchema, timeZone: timeZoneSchema, doorsOpen: timeSchema, entryWindowStart: timeSchema, entryWindowEnd: timeSchema, eventEnd: timeSchema };
 const eventDetailsSchema = z.object({ name: z.string().trim().min(3).max(120), venue: z.string().trim().min(2).max(120), capacity: z.number().int().min(1).max(250_000), ...scheduleFields }).refine((value) => value.endDate >= value.startDate, { message: "End date cannot be before start date", path: ["endDate"] });
-const updateEventSchema = z.object({ action: z.literal("updateEvent"), eventId: eventIdSchema }).and(eventDetailsSchema);
+const updateEventSchema = z.object({ action: z.literal("updateEvent"), eventId: eventIdSchema, expectedVersion: z.number().int().min(1) }).and(eventDetailsSchema);
 const setEventStatusSchema = z.object({ action: z.literal("setEventStatus"), eventId: eventIdSchema, status: z.enum(["draft", "live", "closed", "archived"]) });
 const zoneFields = { eventId: eventIdSchema, name: z.string().trim().min(1).max(80), colour: colourSchema, capacity: z.number().int().min(0).max(250_000) };
 const createZoneSchema = z.object({ action: z.literal("createZone"), ...zoneFields });
@@ -73,6 +73,8 @@ const createGateSchema = z.object({ action: z.literal("createGate"), eventId: ev
 const updateGateSchema = z.object({ action: z.literal("updateGate"), eventId: eventIdSchema, gateId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) });
 const deleteGateSchema = z.object({ action: z.literal("deleteGate"), eventId: eventIdSchema, gateId: z.string().min(1).max(80) });
 const duplicateEventSchema = z.object({ action: z.literal("duplicateEvent"), eventId: eventIdSchema, name: z.string().trim().min(3).max(120) });
+const deleteEventSchema = z.object({ action: z.literal("deleteEvent"), eventId: eventIdSchema, confirmation: z.string().trim().min(3).max(120) });
+const restoreEventSchema = z.object({ action: z.literal("restoreEvent"), eventId: eventIdSchema });
 const updateTicketPolicySchema = z.object({ action: z.literal("updateTicketPolicy"), eventId: eventIdSchema, allowETickets: z.boolean(), allowPhysical: z.boolean(), allowGroups: z.boolean(), maxGroupSize: z.number().int().min(1).max(6), allowRegeneration: z.boolean() }).refine((value) => value.allowETickets || value.allowPhysical, { message: "At least one ticket format must be enabled" });
 const createEventSchema = z.object({
   action: z.literal("createEvent"),
@@ -85,7 +87,7 @@ const createEventSchema = z.object({
   gateCount: z.number().int().min(1).max(20),
 }).refine((value) => value.endDate >= value.startDate, { message: "End date cannot be before start date", path: ["endDate"] });
 
-const actionSchema = z.union([scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, revokeAllGateAccessSchema, createEventSchema, updateTicketThemeSchema, updateEventSchema, setEventStatusSchema, createZoneSchema, updateZoneSchema, deleteZoneSchema, createGateSchema, updateGateSchema, deleteGateSchema, duplicateEventSchema, updateTicketPolicySchema]);
+const actionSchema = z.union([scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, revokeAllGateAccessSchema, createEventSchema, updateTicketThemeSchema, updateEventSchema, setEventStatusSchema, createZoneSchema, updateZoneSchema, deleteZoneSchema, createGateSchema, updateGateSchema, deleteGateSchema, duplicateEventSchema, updateTicketPolicySchema, deleteEventSchema, restoreEventSchema]);
 
 function json(data: unknown, init?: ResponseInit) {
   const response = Response.json(data, init);
@@ -94,7 +96,8 @@ function json(data: unknown, init?: ResponseInit) {
 }
 
 export async function POST(request: Request) {
-  if (!isAuthenticatedRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const role = authenticatedRole(request);
+  if (!role) return json({ error: "Unauthorized" }, { status: 401 });
   if (!isSameOriginRequest(request)) return json({ error: "Invalid request origin" }, { status: 403 });
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > 1_000_000) return json({ error: "Request is too large" }, { status: 413 });
@@ -107,7 +110,9 @@ export async function POST(request: Request) {
     const parsed = actionSchema.safeParse(decoded);
     if (!parsed.success) return json({ error: "Invalid action payload", issues: parsed.error.issues }, { status: 400 });
     const body = parsed.data;
-    const operator = "Authenticated operations user";
+    const allowed = role === "Super Admin" || (role === "Admin" && !["deleteZone", "deleteGate", "deleteEvent", "restoreEvent"].includes(body.action)) || (role === "Gate Supervisor" && ["scan", "lookup"].includes(body.action));
+    if (!allowed) return json({ error: "Your role cannot perform this action" }, { status: 403 });
+    const operator = role;
     switch (body.action) {
       case "scan":
         return json(await consumeTicket({ ...body, operator }));
@@ -128,7 +133,7 @@ export async function POST(request: Request) {
       case "updateTicketTheme":
         return json({ updated: await updateTicketTheme(body.eventId, body, operator) });
       case "updateEvent":
-        return json({ updated: await updateEvent(body.eventId, body, operator) });
+        return json({ updated: await updateEvent(body.eventId, body, operator, body.expectedVersion) });
       case "setEventStatus":
         return json({ updated: await setEventStatus(body.eventId, body.status, operator) });
       case "createZone":
@@ -147,6 +152,10 @@ export async function POST(request: Request) {
         return json({ event: await duplicateEvent(body.eventId, body.name, operator) }, { status: 201 });
       case "updateTicketPolicy":
         return json({ updated: await updateTicketPolicy(body.eventId, body, operator) });
+      case "deleteEvent":
+        return json({ deleted: await softDeleteEvent(body.eventId, body.confirmation, operator) });
+      case "restoreEvent":
+        return json({ restored: await restoreEvent(body.eventId, operator) });
     }
   } catch (error) {
     console.error("Action request failed", error);

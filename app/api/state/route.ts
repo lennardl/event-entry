@@ -1,13 +1,14 @@
 import { DatabaseConfigurationError } from "../../../db";
-import { isAuthenticatedRequest } from "../../../lib/auth";
+import { authenticatedRole } from "../../../lib/auth";
 import { getState } from "../../../lib/store";
 
 export async function GET(request: Request) {
-  if (!isAuthenticatedRequest(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const role = authenticatedRole(request);
+  if (!role) return Response.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const eventId = new URL(request.url).searchParams.get("eventId") ?? undefined;
     if (eventId && (eventId.length > 80 || !/^evt-[a-zA-Z0-9-]+$/.test(eventId))) return Response.json({ error: "Invalid event" }, { status: 400 });
-    const response = Response.json(await getState(eventId));
+    const response = Response.json({ ...await getState(eventId), role });
     response.headers.set("cache-control", "private, no-store");
     return response;
   } catch (error) {

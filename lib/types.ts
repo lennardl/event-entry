@@ -24,6 +24,8 @@ export type EventRecord = {
   name: string;
   venue: string;
   status: string;
+  version: number;
+  deletedAt: string | null;
   capacity: number;
   startDate: string;
   endDate: string;
@@ -50,6 +52,7 @@ export type ZoneRecord = {
 
 export type GateRecord = { id: string; name: string };
 export type GateAccessRecord = { id: string; gateId: string; gateName: string; label: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null; createdAt: string };
+export type AuditRecord = { id: string; action: string; actor: string; subjectId: string; detail: string; createdAt: string };
 
 export type TicketRecord = {
   id: string;
@@ -82,11 +85,13 @@ export type ScanRecord = {
 };
 
 export type AppState = {
+  role?: Role;
   event: EventRecord;
   events: EventSummary[];
   zones: ZoneRecord[];
   gates: GateRecord[];
   gateAccessLinks: GateAccessRecord[];
+  auditEvents: AuditRecord[];
   tickets: TicketRecord[];
   scans: ScanRecord[];
   readiness: {

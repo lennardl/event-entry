@@ -39,12 +39,13 @@ export async function POST(request: Request) {
   if (new TextEncoder().encode(rawBody).byteLength > 4096) return NextResponse.json({ error: "Request is too large" }, { status: 413 });
   let body: { accessKey?: unknown } | null = null;
   try { body = JSON.parse(rawBody) as { accessKey?: unknown }; } catch { body = null; }
-  if (!verifyAccessKey(typeof body?.accessKey === "string" ? body.accessKey : "")) {
+  const role = verifyAccessKey(typeof body?.accessKey === "string" ? body.accessKey : "");
+  if (!role) {
     return NextResponse.json({ error: "Invalid access key" }, { status: 401 });
   }
   attempts.delete(clientKey(request));
-  const response = NextResponse.json({ ok: true });
-  response.cookies.set(SESSION_COOKIE, sessionToken()!, {
+  const response = NextResponse.json({ ok: true, role });
+  response.cookies.set(SESSION_COOKIE, sessionToken(role)!, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",

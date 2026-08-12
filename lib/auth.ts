@@ -1,4 +1,5 @@
 import { createHmac, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { Role } from "./types";
 
 export const SESSION_COOKIE = "event_entry_session";
 const SESSION_MESSAGE = "event-entry-operations-session-v1";
@@ -14,10 +15,14 @@ export function isAccessControlConfigured() {
   return Boolean(configuredAccessKey());
 }
 
-export function sessionToken() {
+const roleSlugs: Record<Role, string> = { "Super Admin": "super", "Admin": "admin", "Gate Supervisor": "gate", "Command Centre Viewer": "viewer" };
+const slugRoles = Object.fromEntries(Object.entries(roleSlugs).map(([role, slug]) => [slug, role])) as Record<string, Role>;
+function configuredKeys(): Array<[Role, string]> { return [["Super Admin", process.env.APP_ACCESS_KEY], ["Admin", process.env.ADMIN_ACCESS_KEY], ["Gate Supervisor", process.env.GATE_SUPERVISOR_ACCESS_KEY], ["Command Centre Viewer", process.env.VIEWER_ACCESS_KEY]].filter((entry): entry is [Role, string] => Boolean(entry[1] && entry[1]!.length >= 32)); }
+
+export function sessionToken(role: Role = "Super Admin") {
   const key = configuredAccessKey();
   if (!key) return null;
-  const payload = `${Math.floor(Date.now() / 1000)}.${randomBytes(18).toString("base64url")}`;
+  const payload = `${Math.floor(Date.now() / 1000)}.${randomBytes(18).toString("base64url")}.${roleSlugs[role]}`;
   const signature = createHmac("sha256", key).update(`${SESSION_MESSAGE}.${payload}`).digest("base64url");
   return `${payload}.${signature}`;
 }
@@ -28,9 +33,9 @@ function safeEqual(left: string, right: string) {
   return timingSafeEqual(leftHash, rightHash);
 }
 
-export function verifyAccessKey(candidate: string) {
-  const key = configuredAccessKey();
-  return Boolean(key && candidate && safeEqual(candidate, key));
+export function verifyAccessKey(candidate: string): Role | null {
+  if (!candidate) return null;
+  return configuredKeys().find(([, key]) => safeEqual(candidate, key))?.[0] ?? null;
 }
 
 export function sessionFromCookieHeader(cookieHeader: string | null) {
@@ -40,21 +45,23 @@ export function sessionFromCookieHeader(cookieHeader: string | null) {
   try { return decodeURIComponent(cookie.slice(SESSION_COOKIE.length + 1)); } catch { return null; }
 }
 
-export function isAuthenticatedRequest(request: Request) {
+export function authenticatedRole(request: Request): Role | null {
   const key = configuredAccessKey();
   const supplied = sessionFromCookieHeader(request.headers.get("cookie"));
-  if (!key || !supplied || supplied.length > 256) return false;
+  if (!key || !supplied || supplied.length > 256) return null;
   const parts = supplied.split(".");
-  if (parts.length !== 3) return false;
-  const [issuedAtText, nonce, signature] = parts;
-  if (!/^\d{10}$/.test(issuedAtText) || !/^[A-Za-z0-9_-]{24}$/.test(nonce) || !/^[A-Za-z0-9_-]{43}$/.test(signature)) return false;
+  if (parts.length !== 4) return null;
+  const [issuedAtText, nonce, roleSlug, signature] = parts;
+  if (!/^\d{10}$/.test(issuedAtText) || !/^[A-Za-z0-9_-]{24}$/.test(nonce) || !slugRoles[roleSlug] || !/^[A-Za-z0-9_-]{43}$/.test(signature)) return null;
   const issuedAt = Number(issuedAtText);
   const now = Math.floor(Date.now() / 1000);
-  if (issuedAt > now + MAX_CLOCK_SKEW_SECONDS || now - issuedAt > SESSION_TTL_SECONDS) return false;
-  const payload = `${issuedAtText}.${nonce}`;
+  if (issuedAt > now + MAX_CLOCK_SKEW_SECONDS || now - issuedAt > SESSION_TTL_SECONDS) return null;
+  const payload = `${issuedAtText}.${nonce}.${roleSlug}`;
   const expected = createHmac("sha256", key).update(`${SESSION_MESSAGE}.${payload}`).digest("base64url");
-  return safeEqual(signature, expected);
+  return safeEqual(signature, expected) ? slugRoles[roleSlug] : null;
 }
+
+export function isAuthenticatedRequest(request: Request) { return Boolean(authenticatedRole(request)); }
 
 export function isSameOriginRequest(request: Request) {
   const origin = request.headers.get("origin");

@@ -14,8 +14,26 @@ test("creates and verifies a signed operations session", () => {
     headers: { cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}` },
   });
   assert.equal(auth.isAuthenticatedRequest(request), true);
-  assert.equal(auth.verifyAccessKey("test-access-key-with-sufficient-entropy"), true);
-  assert.equal(auth.verifyAccessKey("wrong-key"), false);
+  assert.equal(auth.verifyAccessKey("test-access-key-with-sufficient-entropy"), "Super Admin");
+  assert.equal(auth.verifyAccessKey("wrong-key"), null);
+});
+
+test("event setup batches three and four enforce operational safety", async () => {
+  const [storeSource, actionSource, authSource, uiSource, scheduleMigration, safetyMigration] = await Promise.all([
+    readFile("lib/store.ts", "utf8"), readFile("app/api/actions/route.ts", "utf8"), readFile("lib/auth.ts", "utf8"),
+    readFile("app/ui/NdpApp.tsx", "utf8"), readFile("drizzle/0004_event_schedule.sql", "utf8"), readFile("drizzle/0005_event_safety.sql", "utf8"),
+  ]);
+  assert.match(storeSource, /pg_advisory_xact_lock/);
+  assert.match(storeSource, /capacity_ok/);
+  assert.match(scheduleMigration, /time_zone/);
+  assert.match(actionSource, /authenticatedRole/);
+  assert.match(actionSource, /expectedVersion/);
+  assert.match(authSource, /roleSlugs/);
+  assert.doesNotMatch(uiSource, /Demo role/);
+  assert.match(uiSource, /Search events/);
+  assert.match(uiSource, /Audit history/);
+  assert.match(uiSource, /Move to Recently deleted/);
+  assert.match(safetyMigration, /deleted_at/);
 });
 
 test("rejects expired, tampered, and malformed operations sessions", () => {

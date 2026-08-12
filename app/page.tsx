@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
+import { headers } from "next/headers";
+import { authenticatedRole } from "../lib/auth";
 import { getState } from "../lib/store";
 import { NdpApp } from "./ui/NdpApp";
 
@@ -15,6 +17,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
   let initialError = null;
   try {
     initialState = await getState(event);
+    const requestHeaders = await headers();
+    initialState.role = authenticatedRole(new Request("http://localhost", { headers: requestHeaders })) ?? "Command Centre Viewer";
   } catch (error) {
     console.error("Initial operations render failed", error);
     initialError = "Could not load operations data";

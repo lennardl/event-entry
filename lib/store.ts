@@ -9,7 +9,7 @@ const TICKET_SELECT = `SELECT t.id, t.event_id AS "eventId", t.masked_nric AS "m
   t.max_entries AS "maxEntries", t.used_entries AS "usedEntries",
   (t.max_entries - t.used_entries) AS "remainingEntries", t.version, t.token, t.status
   FROM tickets t JOIN zones z ON z.id = t.zone_id`;
-const EVENT_SELECT = `SELECT id, name, venue, status, capacity,
+const EVENT_SELECT = `SELECT id, name, venue, status, version, deleted_at::text AS "deletedAt", capacity,
   start_date::text AS "startDate", end_date::text AS "endDate", time_zone AS "timeZone",
   doors_open AS "doorsOpen", event_end AS "eventEnd",
   entry_window_start AS "entryWindowStart", entry_window_end AS "entryWindowEnd",
@@ -48,6 +48,8 @@ const schemaStatements = [
   `ALTER TABLE events ADD COLUMN IF NOT EXISTS time_zone text NOT NULL DEFAULT 'Asia/Singapore'`,
   `ALTER TABLE events ADD COLUMN IF NOT EXISTS doors_open text NOT NULL DEFAULT '15:00'`,
   `ALTER TABLE events ADD COLUMN IF NOT EXISTS event_end text NOT NULL DEFAULT '23:00'`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS deleted_at timestamptz`,
   `ALTER TABLE gate_access_links ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT 'Gate device'`,
   `ALTER TABLE gate_access_links ADD COLUMN IF NOT EXISTS last_used_at timestamptz`,
   `CREATE TABLE IF NOT EXISTS zones (
@@ -230,7 +232,7 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
   await ensureSeeded();
   const sql = getSql();
   const rawEvents = await sql`
-    SELECT e.id, e.name, e.venue, e.status, e.capacity,
+    SELECT e.id, e.name, e.venue, e.status, e.version, e.deleted_at::text AS "deletedAt", e.capacity,
       e.start_date::text AS "startDate", e.end_date::text AS "endDate", e.time_zone AS "timeZone", e.doors_open AS "doorsOpen", e.event_end AS "eventEnd",
       e.entry_window_start AS "entryWindowStart", e.entry_window_end AS "entryWindowEnd",
       json_build_object('brandName', e.ticket_brand, 'ticketTitle', e.ticket_title, 'instructions', e.ticket_instructions, 'primaryColour', e.ticket_primary_colour, 'accentColour', e.ticket_accent_colour, 'logoDataUrl', e.ticket_logo_data_url, 'supportContact', e.ticket_support_contact, 'terms', e.ticket_terms) AS "ticketTheme",
@@ -239,14 +241,18 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
     FROM events e LEFT JOIN tickets t ON t.event_id = e.id
     GROUP BY e.id ORDER BY e.name, e.id
   ` as unknown as EventSummary[];
-  const eventId = requestedEventId ?? rawEvents[0]?.id;
+  const eventId = requestedEventId ?? rawEvents.find((item) => !item.deletedAt)?.id;
   if (!eventId || !rawEvents.some((event) => event.id === eventId)) throw new Error("Event not found");
-  const [rawZones, rawGates, rawTickets, rawScans, rawGateAccess] = await Promise.all([
+  const [rawZones, rawGates, rawTickets, rawScans, rawGateAccess, rawAudit] = await Promise.all([
     sql`SELECT id, name, colour, capacity FROM zones WHERE event_id = ${eventId} ORDER BY name`,
     sql`SELECT id, name FROM gates WHERE event_id = ${eventId} ORDER BY name`,
     sql.query(`${TICKET_SELECT} WHERE t.event_id = $1 ORDER BY t.id`, [eventId]),
     sql`SELECT s.id, s.ticket_id AS "ticketId", s.gate_id AS "gateId", g.name AS "gateName", s.quantity, s.result, s.mode, s.reason, s.operator, s.created_at::text AS "createdAt" FROM scans s JOIN gates g ON g.id = s.gate_id WHERE s.event_id = ${eventId} ORDER BY s.created_at DESC LIMIT 100`,
     sql`SELECT a.id, a.gate_id AS "gateId", g.name AS "gateName", a.label, a.expires_at::text AS "expiresAt", a.revoked_at::text AS "revokedAt", a.last_used_at::text AS "lastUsedAt", a.created_at::text AS "createdAt" FROM gate_access_links a JOIN gates g ON g.id = a.gate_id WHERE g.event_id = ${eventId} ORDER BY a.created_at DESC`,
+    sql`SELECT a.id, a.action, a.actor, a.subject_id AS "subjectId", a.detail, a.created_at::text AS "createdAt" FROM audit_events a
+      WHERE a.subject_id = ${eventId} OR a.subject_id IN (SELECT id FROM zones WHERE event_id = ${eventId})
+        OR a.subject_id IN (SELECT id FROM gates WHERE event_id = ${eventId}) OR a.subject_id IN (SELECT id FROM tickets WHERE event_id = ${eventId})
+      ORDER BY a.created_at DESC LIMIT 50`,
   ]);
   const zones = rawZones as unknown as ZoneRow[];
   const gates = rawGates as unknown as GateRow[];
@@ -277,6 +283,7 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
     zones: typedZones,
     gates: typedGates,
     gateAccessLinks: rawGateAccess as unknown as AppState["gateAccessLinks"],
+    auditEvents: rawAudit as unknown as AppState["auditEvents"],
     tickets: typedTickets,
     scans: typedScans,
     readiness: { ready: readinessChecks.every((check) => check.ok), progress: Math.round(completedChecks / readinessChecks.length * 100), nextAction: nextCheck ? nextCheck.label : "Monitor live operations", checks: readinessChecks },
@@ -542,19 +549,19 @@ export async function updateTicketTheme(eventId: string, theme: EventRecord["tic
 
 export type UpdateEventInput = Pick<EventRecord, "name" | "venue" | "capacity" | "startDate" | "endDate" | "timeZone" | "doorsOpen" | "entryWindowStart" | "entryWindowEnd" | "eventEnd">;
 
-export async function updateEvent(eventId: string, input: UpdateEventInput, actor: string) {
+export async function updateEvent(eventId: string, input: UpdateEventInput, actor: string, expectedVersion: number) {
   await ensureSeeded();
   const rows = await getSql().query(`
     WITH updated AS (
-      UPDATE events e SET name = $1, venue = $2, capacity = $3, start_date = $4, end_date = $5, time_zone = $6, doors_open = $7, entry_window_start = $8, entry_window_end = $9, event_end = $10
-      WHERE e.id = $11 AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE event_id = e.id), 0)
+      UPDATE events e SET name = $1, venue = $2, capacity = $3, start_date = $4, end_date = $5, time_zone = $6, doors_open = $7, entry_window_start = $8, entry_window_end = $9, event_end = $10, version = version + 1
+      WHERE e.id = $11 AND e.version = $14 AND e.deleted_at IS NULL AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE event_id = e.id), 0)
         AND $3 >= COALESCE((SELECT sum(capacity) FROM zones WHERE event_id = e.id), 0)
       RETURNING id
     ), audited AS (
       INSERT INTO audit_events (id, action, actor, subject_id, detail)
       SELECT $12, 'event.updated', $13, id, 'Updated event details' FROM updated
     ) SELECT id FROM updated
-  `, [input.name, input.venue, input.capacity, input.startDate, input.endDate, input.timeZone, input.doorsOpen, input.entryWindowStart, input.entryWindowEnd, input.eventEnd, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  `, [input.name, input.venue, input.capacity, input.startDate, input.endDate, input.timeZone, input.doorsOpen, input.entryWindowStart, input.entryWindowEnd, input.eventEnd, eventId, randomUUID(), actor, expectedVersion]) as Array<{ id: string }>;
   return Boolean(rows[0]);
 }
 
@@ -562,7 +569,7 @@ export async function setEventStatus(eventId: string, status: "draft" | "live" |
   await ensureSeeded();
   const rows = await getSql().query(`
     WITH updated AS (
-      UPDATE events e SET status = $1 WHERE id = $2 AND (
+      UPDATE events e SET status = $1 WHERE id = $2 AND deleted_at IS NULL AND (
         $1 <> 'live' OR (
           EXISTS (SELECT 1 FROM zones WHERE event_id = e.id) AND EXISTS (SELECT 1 FROM gates WHERE event_id = e.id)
           AND (SELECT COALESCE(sum(capacity), 0) FROM zones WHERE event_id = e.id) = e.capacity
@@ -665,4 +672,20 @@ export async function duplicateEvent(sourceEventId: string, name: string, actor:
     transaction`INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT ${randomUUID()}, 'event.duplicated', ${actor}, id, ${`Copied from ${sourceEventId}`} FROM events WHERE id = ${id}`,
   ]);
   return (rows[0] as unknown as Array<{ id: string }>)[0] ? { id } : null;
+}
+
+export async function softDeleteEvent(eventId: string, confirmation: string, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`WITH updated AS (
+    UPDATE events SET deleted_at = now(), version = version + 1 WHERE id = $1 AND status = 'archived' AND deleted_at IS NULL AND name = $2 RETURNING id
+  ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $3, 'event.deleted', $4, id, 'Soft deleted archived event' FROM updated) SELECT id FROM updated`, [eventId, confirmation, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export async function restoreEvent(eventId: string, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`WITH updated AS (
+    UPDATE events SET deleted_at = NULL, version = version + 1 WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id
+  ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $2, 'event.restored', $3, id, 'Restored soft-deleted event' FROM updated) SELECT id FROM updated`, [eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
 }
