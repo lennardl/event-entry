@@ -21,7 +21,7 @@ test("creates and verifies a signed operations session", () => {
 test("event setup batches three and four enforce operational safety", async () => {
   const [storeSource, actionSource, authSource, uiSource, scheduleMigration, safetyMigration] = await Promise.all([
     readFile("lib/store.ts", "utf8"), readFile("app/api/actions/route.ts", "utf8"), readFile("lib/auth.ts", "utf8"),
-    readFile("app/ui/NdpApp.tsx", "utf8"), readFile("drizzle/0004_event_schedule.sql", "utf8"), readFile("drizzle/0005_event_safety.sql", "utf8"),
+    readFile("app/ui/EventOperationsApp.tsx", "utf8"), readFile("drizzle/0004_event_schedule.sql", "utf8"), readFile("drizzle/0005_event_safety.sql", "utf8"),
   ]);
   assert.match(storeSource, /pg_advisory_xact_lock/);
   assert.match(storeSource, /capacity_ok/);
@@ -145,7 +145,7 @@ test("database initialization and public ticket refresh avoid repeated full-stat
 test("event setup batch one has real scoped mutations and live-only admissions", async () => {
   const [storeSource, actionSource, scanSql, uiSource] = await Promise.all([
     readFile("lib/store.ts", "utf8"), readFile("app/api/actions/route.ts", "utf8"),
-    readFile("lib/scan-sql.ts", "utf8"), readFile("app/ui/NdpApp.tsx", "utf8"),
+    readFile("lib/scan-sql.ts", "utf8"), readFile("app/ui/EventOperationsApp.tsx", "utf8"),
   ]);
   for (const operation of ["updateEvent", "setEventStatus", "createZone", "updateZone", "deleteZone", "createGate", "updateGate", "deleteGate"]) {
     assert.match(storeSource, new RegExp(`export async function ${operation}`));
@@ -162,7 +162,7 @@ test("event setup batch two scopes device access, duplication, branding, and tic
   const [migration, storeSource, actionSource, scannerSource, uiSource] = await Promise.all([
     readFile("drizzle/0003_event_configuration.sql", "utf8"), readFile("lib/store.ts", "utf8"),
     readFile("app/api/actions/route.ts", "utf8"), readFile("app/api/scanner/scan/route.ts", "utf8"),
-    readFile("app/ui/NdpApp.tsx", "utf8"),
+    readFile("app/ui/EventOperationsApp.tsx", "utf8"),
   ]);
   assert.match(migration, /allow_group_tickets/);
   assert.match(migration, /last_used_at/);

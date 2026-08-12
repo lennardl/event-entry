@@ -4,8 +4,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AppState, Role, TicketRecord } from "../../lib/types";
-import { readStored, removeStored, writeStored } from "../../lib/browser-storage";
-import "./ndp.css";
+import { readStored, writeStored } from "../../lib/browser-storage";
+import "./operations.css";
 import "./a11y.css";
 
 type View = "overview" | "tickets" | "scanner" | "exceptions" | "events";
@@ -59,7 +59,7 @@ function registerServiceWorker() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
 }
 
-export function NdpApp({ initialState = null, initialError = null }: { initialState?: AppState | null; initialError?: string | null }) {
+export function EventOperationsApp({ initialState = null, initialError = null }: { initialState?: AppState | null; initialError?: string | null }) {
   const router = useRouter();
   const [state, setState] = useState<AppState | null>(initialState);
   const [view, setView] = useState<View>("overview");
@@ -329,8 +329,6 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
     };
     try {
       writeStored(OFFLINE_PACK_KEY, nextPack);
-      removeStored("ndp-offline-pack");
-      removeStored("ndp-pending-scans");
       const storedPendingCount = readStored<PendingScan[]>(PENDING_SCANS_KEY, []).length;
       queueMicrotask(() => { setPack(nextPack); setPendingCount(storedPendingCount); });
     } catch { /* Browser storage may be unavailable on restricted devices. */ }
@@ -442,7 +440,7 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
             <video ref={videoRef} muted playsInline aria-label="Ticket camera feed" />
             {!cameraActive ? <div className="camera-placeholder"><div className="scan-corners"><span>⌗</span></div><strong>Ready to scan</strong><span>Works with phone screens and printed QR codes</span><button className="primary-button large" onClick={() => void startCamera()}>Open camera</button></div> : <div className="camera-guide"><span /><span /><span /><span /></div>}
           </div>
-          <div className="manual-token"><span>or paste a ticket token</span><div><input value={manualToken} onChange={(event) => setManualToken(event.target.value)} placeholder="NDP27.TKT…" /><button className="secondary-button" onClick={() => selectToken(manualToken)}>Check</button></div></div>
+          <div className="manual-token"><span>or paste a ticket token</span><div><input value={manualToken} onChange={(event) => setManualToken(event.target.value)} placeholder="Ticket token…" /><button className="secondary-button" onClick={() => selectToken(manualToken)}>Check</button></div></div>
         </article>
 
         <aside className="scanner-side">
@@ -613,7 +611,7 @@ function CreateEventDialog({ onClose, onCreated }: { onClose: () => void; onCrea
     }
   }
   const today = new Date().toISOString().slice(0, 10);
-  return <div className="modal-backdrop"><form className="modal event-form" role="dialog" aria-modal="true" aria-labelledby="create-event-title" onSubmit={submit}><button type="button" className="drawer-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">Top-level event</span><h2 id="create-event-title">Create a new event</h2><p>A separate draft operational ledger will be created with your chosen starter layout.</p><input name="status" type="hidden" value="draft" /><div className="form-grid"><label><span>Event name</span><input name="name" required minLength={3} maxLength={120} placeholder="NDP 2027 — Preview 2" /></label><label><span>Venue</span><input name="venue" required minLength={2} maxLength={120} placeholder="The Padang" /></label><label><span>Capacity</span><input name="capacity" type="number" required min={1} max={250000} defaultValue={27000} /></label><label><span>Starter zones</span><input name="zoneCount" type="number" required min={1} max={20} defaultValue={4} /></label><label><span>Starter gates</span><input name="gateCount" type="number" required min={1} max={20} defaultValue={4} /></label><label><span>Start date</span><input name="startDate" type="date" required defaultValue={today} /></label><label><span>End date</span><input name="endDate" type="date" required defaultValue={today} /></label><label><span>Time zone</span><select name="timeZone" defaultValue="Asia/Singapore">{EVENT_TIME_ZONES.map((zone) => <option key={zone}>{zone}</option>)}</select></label><label><span>Doors open</span><input name="doorsOpen" type="time" required defaultValue="15:00" /></label><label><span>Entry starts</span><input name="entryWindowStart" type="time" required defaultValue="16:00" /></label><label><span>Entry ends</span><input name="entryWindowEnd" type="time" required defaultValue="18:00" /></label><label><span>Event ends</span><input name="eventEnd" type="time" required defaultValue="23:00" /></label></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Creating event…" : "Create event"}</button></div></form></div>;
+  return <div className="modal-backdrop"><form className="modal event-form" role="dialog" aria-modal="true" aria-labelledby="create-event-title" onSubmit={submit}><button type="button" className="drawer-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">Top-level event</span><h2 id="create-event-title">Create a new event</h2><p>A separate draft operational ledger will be created with your chosen starter layout.</p><input name="status" type="hidden" value="draft" /><div className="form-grid"><label><span>Event name</span><input name="name" required minLength={3} maxLength={120} placeholder="Summer Festival — Opening Night" /></label><label><span>Venue</span><input name="venue" required minLength={2} maxLength={120} placeholder="Civic Arena" /></label><label><span>Capacity</span><input name="capacity" type="number" required min={1} max={250000} defaultValue={27000} /></label><label><span>Starter zones</span><input name="zoneCount" type="number" required min={1} max={20} defaultValue={4} /></label><label><span>Starter gates</span><input name="gateCount" type="number" required min={1} max={20} defaultValue={4} /></label><label><span>Start date</span><input name="startDate" type="date" required defaultValue={today} /></label><label><span>End date</span><input name="endDate" type="date" required defaultValue={today} /></label><label><span>Time zone</span><select name="timeZone" defaultValue="Asia/Singapore">{EVENT_TIME_ZONES.map((zone) => <option key={zone}>{zone}</option>)}</select></label><label><span>Doors open</span><input name="doorsOpen" type="time" required defaultValue="15:00" /></label><label><span>Entry starts</span><input name="entryWindowStart" type="time" required defaultValue="16:00" /></label><label><span>Entry ends</span><input name="entryWindowEnd" type="time" required defaultValue="18:00" /></label><label><span>Event ends</span><input name="eventEnd" type="time" required defaultValue="23:00" /></label></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Creating event…" : "Create event"}</button></div></form></div>;
 }
 
 function SetupCard({ eyebrow, title, detail, metric, action, onAction }: { eyebrow: string; title: string; detail: string; metric: string; action: string; onAction: () => void }) { return <article className="panel setup-card"><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{detail}</p><strong>{metric}</strong><button className="secondary-button" onClick={onAction}>{action}</button></article>; }
