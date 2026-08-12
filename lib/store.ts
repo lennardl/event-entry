@@ -10,6 +10,8 @@ const TICKET_SELECT = `SELECT t.id, t.event_id AS "eventId", t.masked_nric AS "m
   (t.max_entries - t.used_entries) AS "remainingEntries", t.version, t.token, t.status
   FROM tickets t JOIN zones z ON z.id = t.zone_id`;
 const EVENT_SELECT = `SELECT id, name, venue, status, capacity,
+  start_date::text AS "startDate", end_date::text AS "endDate", time_zone AS "timeZone",
+  doors_open AS "doorsOpen", event_end AS "eventEnd",
   entry_window_start AS "entryWindowStart", entry_window_end AS "entryWindowEnd",
   json_build_object('brandName', ticket_brand, 'ticketTitle', ticket_title, 'instructions', ticket_instructions,
     'primaryColour', ticket_primary_colour, 'accentColour', ticket_accent_colour, 'logoDataUrl', ticket_logo_data_url,
@@ -41,6 +43,11 @@ const schemaStatements = [
   `ALTER TABLE events ADD COLUMN IF NOT EXISTS allow_group_tickets boolean NOT NULL DEFAULT true`,
   `ALTER TABLE events ADD COLUMN IF NOT EXISTS max_group_size integer NOT NULL DEFAULT 6`,
   `ALTER TABLE events ADD COLUMN IF NOT EXISTS allow_ticket_regeneration boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS start_date date NOT NULL DEFAULT CURRENT_DATE`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS end_date date NOT NULL DEFAULT CURRENT_DATE`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS time_zone text NOT NULL DEFAULT 'Asia/Singapore'`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS doors_open text NOT NULL DEFAULT '15:00'`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS event_end text NOT NULL DEFAULT '23:00'`,
   `ALTER TABLE gate_access_links ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT 'Gate device'`,
   `ALTER TABLE gate_access_links ADD COLUMN IF NOT EXISTS last_used_at timestamptz`,
   `CREATE TABLE IF NOT EXISTS zones (
@@ -224,6 +231,7 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
   const sql = getSql();
   const rawEvents = await sql`
     SELECT e.id, e.name, e.venue, e.status, e.capacity,
+      e.start_date::text AS "startDate", e.end_date::text AS "endDate", e.time_zone AS "timeZone", e.doors_open AS "doorsOpen", e.event_end AS "eventEnd",
       e.entry_window_start AS "entryWindowStart", e.entry_window_end AS "entryWindowEnd",
       json_build_object('brandName', e.ticket_brand, 'ticketTitle', e.ticket_title, 'instructions', e.ticket_instructions, 'primaryColour', e.ticket_primary_colour, 'accentColour', e.ticket_accent_colour, 'logoDataUrl', e.ticket_logo_data_url, 'supportContact', e.ticket_support_contact, 'terms', e.ticket_terms) AS "ticketTheme",
       json_build_object('allowETickets', e.allow_e_tickets, 'allowPhysical', e.allow_physical_tickets, 'allowGroups', e.allow_group_tickets, 'maxGroupSize', e.max_group_size, 'allowRegeneration', e.allow_ticket_regeneration) AS "ticketPolicy",
@@ -254,13 +262,15 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
   const recentCutoff = Date.now() - 5 * 60 * 1000;
   const recentAdmissions = typedScans.reduce((sum, scan) => Date.parse(scan.createdAt) >= recentCutoff && scan.result === "allowed" ? sum + scan.quantity : sum, 0);
   const zoneCapacity = typedZones.reduce((sum, zone) => sum + zone.capacity, 0);
-  const readinessChecks = [
-    { id: "status", label: "Event is live", ok: event.status === "live", detail: event.status === "live" ? "Admissions are enabled" : `Current status: ${event.status}` },
-    { id: "zones", label: "Entry zones configured", ok: typedZones.length > 0, detail: `${typedZones.length} zone${typedZones.length === 1 ? "" : "s"}` },
-    { id: "capacity", label: "Zone capacity matches venue", ok: zoneCapacity === event.capacity, detail: `${zoneCapacity} of ${event.capacity} allocated` },
-    { id: "gates", label: "Gates configured", ok: typedGates.length > 0, detail: `${typedGates.length} gate${typedGates.length === 1 ? "" : "s"}` },
-    { id: "tickets", label: "Tickets issued", ok: typedTickets.length > 0, detail: `${typedTickets.length} ticket record${typedTickets.length === 1 ? "" : "s"}` },
+  const readinessChecks: AppState["readiness"]["checks"] = [
+    { id: "status", level: "warning", label: "Event is live", ok: event.status === "live", detail: event.status === "live" ? "Admissions are enabled" : `Current status: ${event.status}` },
+    { id: "zones", level: "blocker", label: "Entry zones configured", ok: typedZones.length > 0, detail: `${typedZones.length} zone${typedZones.length === 1 ? "" : "s"}` },
+    { id: "capacity", level: "blocker", label: "Zone capacity matches venue", ok: zoneCapacity === event.capacity, detail: `${zoneCapacity} of ${event.capacity} allocated` },
+    { id: "gates", level: "blocker", label: "Gates configured", ok: typedGates.length > 0, detail: `${typedGates.length} gate${typedGates.length === 1 ? "" : "s"}` },
+    { id: "tickets", level: "warning", label: "Tickets issued", ok: typedTickets.length > 0, detail: `${typedTickets.length} ticket record${typedTickets.length === 1 ? "" : "s"}` },
   ];
+  const completedChecks = readinessChecks.filter((check) => check.ok).length;
+  const nextCheck = readinessChecks.find((check) => !check.ok);
   return {
     event,
     events: rawEvents,
@@ -269,7 +279,7 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
     gateAccessLinks: rawGateAccess as unknown as AppState["gateAccessLinks"],
     tickets: typedTickets,
     scans: typedScans,
-    readiness: { ready: readinessChecks.every((check) => check.ok), checks: readinessChecks },
+    readiness: { ready: readinessChecks.every((check) => check.ok), progress: Math.round(completedChecks / readinessChecks.length * 100), nextAction: nextCheck ? nextCheck.label : "Monitor live operations", checks: readinessChecks },
     metrics: {
       allocated,
       admitted,
@@ -453,7 +463,10 @@ export async function importTickets(rows: ImportRow[], eventId: string, actor: s
   if (!records.length) return { created: 0 };
   const sql = getSql();
   const inserted = await sql.query(`
-    WITH incoming AS (
+    WITH event_lock AS MATERIALIZED (
+      SELECT e.* FROM events e, LATERAL (SELECT pg_advisory_xact_lock(hashtext(e.id))) lock
+      WHERE e.id = $3
+    ), incoming AS (
       SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(
         id text, "eventId" text, "nricHash" text, "maskedNric" text,
         mobile text, "zoneId" text, format text, "maxEntries" integer, token text
@@ -461,13 +474,22 @@ export async function importTickets(rows: ImportRow[], eventId: string, actor: s
     ), valid AS (
       SELECT i.* FROM incoming i
       JOIN zones z ON z.id = i."zoneId" AND z.event_id = i."eventId"
-      JOIN events e ON e.id = i."eventId"
+      JOIN event_lock e ON e.id = i."eventId"
       WHERE (i.format = 'e-ticket' AND e.allow_e_tickets OR i.format = 'physical' AND e.allow_physical_tickets)
         AND (i."maxEntries" = 1 OR e.allow_group_tickets) AND i."maxEntries" <= e.max_group_size
+    ), capacity_ok AS (
+      SELECT count(*) = (SELECT count(*) FROM incoming)
+        AND COALESCE((SELECT sum(max_entries) FROM tickets WHERE event_id = $3), 0) + COALESCE(sum(v."maxEntries"), 0) <= max(e.capacity)
+        AND NOT EXISTS (
+          SELECT 1 FROM (SELECT "zoneId", sum("maxEntries") entries FROM valid GROUP BY "zoneId") allocations
+          JOIN zones z ON z.id = allocations."zoneId"
+          WHERE allocations.entries + COALESCE((SELECT sum(max_entries) FROM tickets WHERE zone_id = z.id), 0) > z.capacity
+        ) AS allowed
+      FROM valid v CROSS JOIN event_lock e
     ), created AS (
       INSERT INTO tickets (id, event_id, nric_hash, masked_nric, mobile, zone_id, format, max_entries, token)
       SELECT id, "eventId", "nricHash", "maskedNric", mobile, "zoneId", format, "maxEntries", token
-      FROM valid
+      FROM valid WHERE (SELECT allowed FROM capacity_ok)
       RETURNING id
     ), audited AS (
       INSERT INTO audit_events (id, action, actor, subject_id, detail)
@@ -475,11 +497,12 @@ export async function importTickets(rows: ImportRow[], eventId: string, actor: s
       FROM created
     )
     SELECT count(*)::integer AS created FROM created
-  `, [JSON.stringify(records), actor]) as Array<{ created: number }>;
-  return { created: inserted[0]?.created ?? 0 };
+  `, [JSON.stringify(records), actor, eventId]) as Array<{ created: number }>;
+  const created = inserted[0]?.created ?? 0;
+  return { created, rejected: records.length - created };
 }
 
-export type CreateEventInput = Pick<EventRecord, "name" | "venue" | "status" | "capacity" | "entryWindowStart" | "entryWindowEnd"> & { zoneCount?: number; gateCount?: number };
+export type CreateEventInput = Pick<EventRecord, "name" | "venue" | "status" | "capacity" | "startDate" | "endDate" | "timeZone" | "doorsOpen" | "entryWindowStart" | "entryWindowEnd" | "eventEnd"> & { zoneCount?: number; gateCount?: number };
 
 export async function createEvent(input: CreateEventInput, actor: string) {
   await ensureSeeded();
@@ -492,7 +515,7 @@ export async function createEvent(input: CreateEventInput, actor: string) {
   const zones = Array.from({ length: zoneCount }, (_, index) => zoneTemplates[index] ?? [`Zone ${index + 1}`, "#6750a4"] as const);
   const sql = getSql();
   await sql.transaction((transaction) => [
-    transaction`INSERT INTO events (id, name, venue, status, capacity, entry_window_start, entry_window_end) VALUES (${eventId}, ${input.name}, ${input.venue}, ${input.status}, ${input.capacity}, ${input.entryWindowStart}, ${input.entryWindowEnd})`,
+    transaction`INSERT INTO events (id, name, venue, status, capacity, start_date, end_date, time_zone, doors_open, entry_window_start, entry_window_end, event_end) VALUES (${eventId}, ${input.name}, ${input.venue}, ${input.status}, ${input.capacity}, ${input.startDate}, ${input.endDate}, ${input.timeZone}, ${input.doorsOpen}, ${input.entryWindowStart}, ${input.entryWindowEnd}, ${input.eventEnd})`,
     ...zones.map(([name, colour], index) => transaction`INSERT INTO zones (id, event_id, name, colour, capacity) VALUES (${`zone-${randomUUID()}`}, ${eventId}, ${name}, ${colour}, ${index === zones.length - 1 ? input.capacity - (zoneCapacity * (zoneCount - 1)) : zoneCapacity})`),
     ...Array.from({ length: gateCount }, (_, index) => transaction`INSERT INTO gates (id, event_id, name) VALUES (${`gate-${randomUUID()}`}, ${eventId}, ${`Gate ${String.fromCharCode(65 + index)}`})`),
     transaction`INSERT INTO audit_events (id, action, actor, subject_id, detail) VALUES (${randomUUID()}, 'event.created', ${actor}, ${eventId}, ${`${input.name} at ${input.venue}`})`,
@@ -517,20 +540,21 @@ export async function updateTicketTheme(eventId: string, theme: EventRecord["tic
   return Boolean(rows[0]);
 }
 
-export type UpdateEventInput = Pick<EventRecord, "name" | "venue" | "capacity" | "entryWindowStart" | "entryWindowEnd">;
+export type UpdateEventInput = Pick<EventRecord, "name" | "venue" | "capacity" | "startDate" | "endDate" | "timeZone" | "doorsOpen" | "entryWindowStart" | "entryWindowEnd" | "eventEnd">;
 
 export async function updateEvent(eventId: string, input: UpdateEventInput, actor: string) {
   await ensureSeeded();
   const rows = await getSql().query(`
     WITH updated AS (
-      UPDATE events e SET name = $1, venue = $2, capacity = $3, entry_window_start = $4, entry_window_end = $5
-      WHERE e.id = $6 AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE event_id = e.id), 0)
+      UPDATE events e SET name = $1, venue = $2, capacity = $3, start_date = $4, end_date = $5, time_zone = $6, doors_open = $7, entry_window_start = $8, entry_window_end = $9, event_end = $10
+      WHERE e.id = $11 AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE event_id = e.id), 0)
+        AND $3 >= COALESCE((SELECT sum(capacity) FROM zones WHERE event_id = e.id), 0)
       RETURNING id
     ), audited AS (
       INSERT INTO audit_events (id, action, actor, subject_id, detail)
-      SELECT $7, 'event.updated', $8, id, 'Updated event details' FROM updated
+      SELECT $12, 'event.updated', $13, id, 'Updated event details' FROM updated
     ) SELECT id FROM updated
-  `, [input.name, input.venue, input.capacity, input.entryWindowStart, input.entryWindowEnd, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  `, [input.name, input.venue, input.capacity, input.startDate, input.endDate, input.timeZone, input.doorsOpen, input.entryWindowStart, input.entryWindowEnd, input.eventEnd, eventId, randomUUID(), actor]) as Array<{ id: string }>;
   return Boolean(rows[0]);
 }
 
@@ -559,6 +583,7 @@ export async function createZone(eventId: string, input: { name: string; colour:
     WITH created AS (
       INSERT INTO zones (id, event_id, name, colour, capacity)
       SELECT $1, e.id, $2, $3, $4 FROM events e WHERE e.id = $5 AND e.status <> 'archived'
+        AND $4 + COALESCE((SELECT sum(capacity) FROM zones WHERE event_id = e.id), 0) <= e.capacity
       RETURNING id
     ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $6, 'zone.created', $7, id, $2 FROM created)
     SELECT id FROM created
@@ -572,6 +597,7 @@ export async function updateZone(eventId: string, zoneId: string, input: { name:
     WITH updated AS (
       UPDATE zones z SET name = $1, colour = $2, capacity = $3
       WHERE z.id = $4 AND z.event_id = $5 AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE zone_id = z.id), 0)
+        AND $3 + COALESCE((SELECT sum(capacity) FROM zones WHERE event_id = $5 AND id <> z.id), 0) <= (SELECT capacity FROM events WHERE id = $5)
       RETURNING id
     ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $6, 'zone.updated', $7, id, $1 FROM updated)
     SELECT id FROM updated
@@ -632,8 +658,8 @@ export async function duplicateEvent(sourceEventId: string, name: string, actor:
   const id = `evt-${randomUUID()}`;
   const sql = getSql();
   const rows = await sql.transaction((transaction) => [
-    transaction.query(`INSERT INTO events (id, name, venue, status, capacity, entry_window_start, entry_window_end, ticket_brand, ticket_title, ticket_instructions, ticket_primary_colour, ticket_accent_colour, ticket_logo_data_url, ticket_support_contact, ticket_terms, allow_e_tickets, allow_physical_tickets, allow_group_tickets, max_group_size, allow_ticket_regeneration)
-      SELECT $1, $2, venue, 'draft', capacity, entry_window_start, entry_window_end, ticket_brand, ticket_title, ticket_instructions, ticket_primary_colour, ticket_accent_colour, ticket_logo_data_url, ticket_support_contact, ticket_terms, allow_e_tickets, allow_physical_tickets, allow_group_tickets, max_group_size, allow_ticket_regeneration FROM events WHERE id = $3 RETURNING id`, [id, name, sourceEventId]),
+    transaction.query(`INSERT INTO events (id, name, venue, status, capacity, start_date, end_date, time_zone, doors_open, entry_window_start, entry_window_end, event_end, ticket_brand, ticket_title, ticket_instructions, ticket_primary_colour, ticket_accent_colour, ticket_logo_data_url, ticket_support_contact, ticket_terms, allow_e_tickets, allow_physical_tickets, allow_group_tickets, max_group_size, allow_ticket_regeneration)
+      SELECT $1, $2, venue, 'draft', capacity, start_date, end_date, time_zone, doors_open, entry_window_start, entry_window_end, event_end, ticket_brand, ticket_title, ticket_instructions, ticket_primary_colour, ticket_accent_colour, ticket_logo_data_url, ticket_support_contact, ticket_terms, allow_e_tickets, allow_physical_tickets, allow_group_tickets, max_group_size, allow_ticket_regeneration FROM events WHERE id = $3 RETURNING id`, [id, name, sourceEventId]),
     transaction.query(`INSERT INTO zones (id, event_id, name, colour, capacity) SELECT 'zone-' || gen_random_uuid()::text, $1, name, colour, capacity FROM zones WHERE event_id = $2`, [id, sourceEventId]),
     transaction.query(`INSERT INTO gates (id, event_id, name) SELECT 'gate-' || gen_random_uuid()::text, $1, name FROM gates WHERE event_id = $2`, [id, sourceEventId]),
     transaction`INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT ${randomUUID()}, 'event.duplicated', ${actor}, id, ${`Copied from ${sourceEventId}`} FROM events WHERE id = ${id}`,

@@ -58,7 +58,11 @@ const updateTicketThemeSchema = z.object({
   logoDataUrl: z.union([z.literal(""), z.string().max(350_000).regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/)]),
   supportContact: z.string().trim().max(120), terms: z.string().trim().max(500),
 }).refine((value) => contrastWithWhite(value.primaryColour) >= 4.5, { message: "Primary colour needs stronger contrast with white text", path: ["primaryColour"] });
-const eventDetailsSchema = z.object({ name: z.string().trim().min(3).max(120), venue: z.string().trim().min(2).max(120), capacity: z.number().int().min(1).max(250_000), entryWindowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), entryWindowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }).refine((value) => value.entryWindowEnd > value.entryWindowStart, { message: "Entry end time must be after start time", path: ["entryWindowEnd"] });
+const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const timeZoneSchema = z.string().trim().min(3).max(64).refine((value) => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } }, "Unknown IANA time zone");
+const scheduleFields = { startDate: dateSchema, endDate: dateSchema, timeZone: timeZoneSchema, doorsOpen: timeSchema, entryWindowStart: timeSchema, entryWindowEnd: timeSchema, eventEnd: timeSchema };
+const eventDetailsSchema = z.object({ name: z.string().trim().min(3).max(120), venue: z.string().trim().min(2).max(120), capacity: z.number().int().min(1).max(250_000), ...scheduleFields }).refine((value) => value.endDate >= value.startDate, { message: "End date cannot be before start date", path: ["endDate"] });
 const updateEventSchema = z.object({ action: z.literal("updateEvent"), eventId: eventIdSchema }).and(eventDetailsSchema);
 const setEventStatusSchema = z.object({ action: z.literal("setEventStatus"), eventId: eventIdSchema, status: z.enum(["draft", "live", "closed", "archived"]) });
 const zoneFields = { eventId: eventIdSchema, name: z.string().trim().min(1).max(80), colour: colourSchema, capacity: z.number().int().min(0).max(250_000) };
@@ -76,11 +80,10 @@ const createEventSchema = z.object({
   venue: z.string().trim().min(2).max(120),
   status: z.literal("draft"),
   capacity: z.number().int().min(1).max(250_000),
-  entryWindowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-  entryWindowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  ...scheduleFields,
   zoneCount: z.number().int().min(1).max(20),
   gateCount: z.number().int().min(1).max(20),
-}).refine((value) => value.entryWindowEnd > value.entryWindowStart, { message: "Entry end time must be after start time", path: ["entryWindowEnd"] });
+}).refine((value) => value.endDate >= value.startDate, { message: "End date cannot be before start date", path: ["endDate"] });
 
 const actionSchema = z.union([scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, revokeAllGateAccessSchema, createEventSchema, updateTicketThemeSchema, updateEventSchema, setEventStatusSchema, createZoneSchema, updateZoneSchema, deleteZoneSchema, createGateSchema, updateGateSchema, deleteGateSchema, duplicateEventSchema, updateTicketPolicySchema]);
 

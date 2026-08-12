@@ -25,6 +25,11 @@ export type EventRecord = {
   venue: string;
   status: string;
   capacity: number;
+  startDate: string;
+  endDate: string;
+  timeZone: string;
+  doorsOpen: string;
+  eventEnd: string;
   entryWindowStart: string;
   entryWindowEnd: string;
   ticketTheme: TicketTheme;
@@ -86,7 +91,9 @@ export type AppState = {
   scans: ScanRecord[];
   readiness: {
     ready: boolean;
-    checks: Array<{ id: string; label: string; ok: boolean; detail: string }>;
+    progress: number;
+    nextAction: string;
+    checks: Array<{ id: string; label: string; ok: boolean; detail: string; level: "blocker" | "warning" }>;
   };
   metrics: {
     allocated: number;
