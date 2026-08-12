@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../db";
 import { isAuthenticatedRequest, isSameOriginRequest } from "../../../lib/auth";
-import { consumeTicket, createEvent, createGateAccessLink, findTicketsByNric, importTickets, regenerateTicket, revokeGateAccessLink, updateTicketTheme } from "../../../lib/store";
+import { consumeTicket, createEvent, createGate, createGateAccessLink, createZone, deleteGate, deleteZone, findTicketsByNric, importTickets, regenerateTicket, revokeGateAccessLink, setEventStatus, updateEvent, updateGate, updateTicketTheme, updateZone } from "../../../lib/store";
 
 const eventIdSchema = z.string().trim().min(1).max(80).regex(/^evt-[a-zA-Z0-9-]+$/);
 
@@ -55,17 +55,27 @@ const updateTicketThemeSchema = z.object({
   instructions: z.string().trim().min(10).max(300),
   primaryColour: colourSchema, accentColour: colourSchema,
 }).refine((value) => contrastWithWhite(value.primaryColour) >= 4.5, { message: "Primary colour needs stronger contrast with white text", path: ["primaryColour"] });
+const eventDetailsSchema = z.object({ name: z.string().trim().min(3).max(120), venue: z.string().trim().min(2).max(120), capacity: z.number().int().min(1).max(250_000), entryWindowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), entryWindowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }).refine((value) => value.entryWindowEnd > value.entryWindowStart, { message: "Entry end time must be after start time", path: ["entryWindowEnd"] });
+const updateEventSchema = z.object({ action: z.literal("updateEvent"), eventId: eventIdSchema }).and(eventDetailsSchema);
+const setEventStatusSchema = z.object({ action: z.literal("setEventStatus"), eventId: eventIdSchema, status: z.enum(["draft", "live", "closed", "archived"]) });
+const zoneFields = { eventId: eventIdSchema, name: z.string().trim().min(1).max(80), colour: colourSchema, capacity: z.number().int().min(0).max(250_000) };
+const createZoneSchema = z.object({ action: z.literal("createZone"), ...zoneFields });
+const updateZoneSchema = z.object({ action: z.literal("updateZone"), zoneId: z.string().min(1).max(80), ...zoneFields });
+const deleteZoneSchema = z.object({ action: z.literal("deleteZone"), eventId: eventIdSchema, zoneId: z.string().min(1).max(80) });
+const createGateSchema = z.object({ action: z.literal("createGate"), eventId: eventIdSchema, name: z.string().trim().min(1).max(80) });
+const updateGateSchema = z.object({ action: z.literal("updateGate"), eventId: eventIdSchema, gateId: z.string().min(1).max(80), name: z.string().trim().min(1).max(80) });
+const deleteGateSchema = z.object({ action: z.literal("deleteGate"), eventId: eventIdSchema, gateId: z.string().min(1).max(80) });
 const createEventSchema = z.object({
   action: z.literal("createEvent"),
   name: z.string().trim().min(3).max(120),
   venue: z.string().trim().min(2).max(120),
-  status: z.enum(["draft", "live", "closed"]),
+  status: z.literal("draft"),
   capacity: z.number().int().min(1).max(250_000),
   entryWindowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   entryWindowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
 }).refine((value) => value.entryWindowEnd > value.entryWindowStart, { message: "Entry end time must be after start time", path: ["entryWindowEnd"] });
 
-const actionSchema = z.discriminatedUnion("action", [scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, createEventSchema, updateTicketThemeSchema]);
+const actionSchema = z.union([scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, createEventSchema, updateTicketThemeSchema, updateEventSchema, setEventStatusSchema, createZoneSchema, updateZoneSchema, deleteZoneSchema, createGateSchema, updateGateSchema, deleteGateSchema]);
 
 function json(data: unknown, init?: ResponseInit) {
   const response = Response.json(data, init);
@@ -105,6 +115,22 @@ export async function POST(request: Request) {
         return json({ event: await createEvent(body, operator) }, { status: 201 });
       case "updateTicketTheme":
         return json({ updated: await updateTicketTheme(body.eventId, body, operator) });
+      case "updateEvent":
+        return json({ updated: await updateEvent(body.eventId, body, operator) });
+      case "setEventStatus":
+        return json({ updated: await setEventStatus(body.eventId, body.status, operator) });
+      case "createZone":
+        return json({ zone: await createZone(body.eventId, body, operator) }, { status: 201 });
+      case "updateZone":
+        return json({ updated: await updateZone(body.eventId, body.zoneId, body, operator) });
+      case "deleteZone":
+        return json({ deleted: await deleteZone(body.eventId, body.zoneId, operator) });
+      case "createGate":
+        return json({ gate: await createGate(body.eventId, body.name, operator) }, { status: 201 });
+      case "updateGate":
+        return json({ updated: await updateGate(body.eventId, body.gateId, body.name, operator) });
+      case "deleteGate":
+        return json({ deleted: await deleteGate(body.eventId, body.gateId, operator) });
     }
   } catch (error) {
     console.error("Action request failed", error);

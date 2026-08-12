@@ -101,6 +101,7 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS scans_event_created_idx ON scans(event_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS scans_ticket_id_idx ON scans(ticket_id)`,
   `CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC)`,
+  `UPDATE events SET status = 'live' WHERE status NOT IN ('draft', 'live', 'closed', 'archived')`,
 ];
 
 let schemaReadyPromise: Promise<void> | null = null;
@@ -145,7 +146,7 @@ async function seedDatabase() {
   const sql = getSql();
   await sql`
     INSERT INTO events (id, name, venue, status, capacity, entry_window_start, entry_window_end)
-    VALUES (${SEEDED_EVENT_ID}, 'NDP 2027 — Preview 1', 'The Padang', 'Live rehearsal', 27000, '16:00', '18:00')
+    VALUES (${SEEDED_EVENT_ID}, 'NDP 2027 — Preview 1', 'The Padang', 'live', 27000, '16:00', '18:00')
     ON CONFLICT (id) DO NOTHING
   `;
 
@@ -237,6 +238,14 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
   const admitted = typedTickets.reduce((sum, ticket) => sum + ticket.usedEntries, 0);
   const recentCutoff = Date.now() - 5 * 60 * 1000;
   const recentAdmissions = typedScans.reduce((sum, scan) => Date.parse(scan.createdAt) >= recentCutoff && scan.result === "allowed" ? sum + scan.quantity : sum, 0);
+  const zoneCapacity = typedZones.reduce((sum, zone) => sum + zone.capacity, 0);
+  const readinessChecks = [
+    { id: "status", label: "Event is live", ok: event.status === "live", detail: event.status === "live" ? "Admissions are enabled" : `Current status: ${event.status}` },
+    { id: "zones", label: "Entry zones configured", ok: typedZones.length > 0, detail: `${typedZones.length} zone${typedZones.length === 1 ? "" : "s"}` },
+    { id: "capacity", label: "Zone capacity matches venue", ok: zoneCapacity === event.capacity, detail: `${zoneCapacity} of ${event.capacity} allocated` },
+    { id: "gates", label: "Gates configured", ok: typedGates.length > 0, detail: `${typedGates.length} gate${typedGates.length === 1 ? "" : "s"}` },
+    { id: "tickets", label: "Tickets issued", ok: typedTickets.length > 0, detail: `${typedTickets.length} ticket record${typedTickets.length === 1 ? "" : "s"}` },
+  ];
   return {
     event,
     events: rawEvents,
@@ -244,6 +253,7 @@ export async function getState(requestedEventId?: string): Promise<AppState> {
     gates: typedGates,
     tickets: typedTickets,
     scans: typedScans,
+    readiness: { ready: readinessChecks.every((check) => check.ok), checks: readinessChecks },
     metrics: {
       allocated,
       admitted,
@@ -469,5 +479,106 @@ export async function updateTicketTheme(eventId: string, theme: EventRecord["tic
       SELECT $7, 'event.ticket_theme.updated', $8, id, 'Updated event ticket branding' FROM updated
     ) SELECT id FROM updated
   `, [theme.brandName, theme.ticketTitle, theme.instructions, theme.primaryColour, theme.accentColour, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export type UpdateEventInput = Pick<EventRecord, "name" | "venue" | "capacity" | "entryWindowStart" | "entryWindowEnd">;
+
+export async function updateEvent(eventId: string, input: UpdateEventInput, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`
+    WITH updated AS (
+      UPDATE events e SET name = $1, venue = $2, capacity = $3, entry_window_start = $4, entry_window_end = $5
+      WHERE e.id = $6 AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE event_id = e.id), 0)
+      RETURNING id
+    ), audited AS (
+      INSERT INTO audit_events (id, action, actor, subject_id, detail)
+      SELECT $7, 'event.updated', $8, id, 'Updated event details' FROM updated
+    ) SELECT id FROM updated
+  `, [input.name, input.venue, input.capacity, input.entryWindowStart, input.entryWindowEnd, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export async function setEventStatus(eventId: string, status: "draft" | "live" | "closed" | "archived", actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`
+    WITH updated AS (
+      UPDATE events e SET status = $1 WHERE id = $2 AND (
+        $1 <> 'live' OR (
+          EXISTS (SELECT 1 FROM zones WHERE event_id = e.id) AND EXISTS (SELECT 1 FROM gates WHERE event_id = e.id)
+          AND (SELECT COALESCE(sum(capacity), 0) FROM zones WHERE event_id = e.id) = e.capacity
+        )
+      ) RETURNING id
+    ), audited AS (
+      INSERT INTO audit_events (id, action, actor, subject_id, detail)
+      SELECT $3, 'event.status.changed', $4, id, 'Changed status to ' || $1 FROM updated
+    ) SELECT id FROM updated
+  `, [status, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export async function createZone(eventId: string, input: { name: string; colour: string; capacity: number }, actor: string) {
+  await ensureSeeded();
+  const id = `zone-${randomUUID()}`;
+  const rows = await getSql().query(`
+    WITH created AS (
+      INSERT INTO zones (id, event_id, name, colour, capacity)
+      SELECT $1, e.id, $2, $3, $4 FROM events e WHERE e.id = $5 AND e.status <> 'archived'
+      RETURNING id
+    ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $6, 'zone.created', $7, id, $2 FROM created)
+    SELECT id FROM created
+  `, [id, input.name, input.colour, input.capacity, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return rows[0] ?? null;
+}
+
+export async function updateZone(eventId: string, zoneId: string, input: { name: string; colour: string; capacity: number }, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`
+    WITH updated AS (
+      UPDATE zones z SET name = $1, colour = $2, capacity = $3
+      WHERE z.id = $4 AND z.event_id = $5 AND $3 >= COALESCE((SELECT sum(max_entries) FROM tickets WHERE zone_id = z.id), 0)
+      RETURNING id
+    ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $6, 'zone.updated', $7, id, $1 FROM updated)
+    SELECT id FROM updated
+  `, [input.name, input.colour, input.capacity, zoneId, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export async function deleteZone(eventId: string, zoneId: string, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`
+    WITH deleted AS (
+      DELETE FROM zones z WHERE z.id = $1 AND z.event_id = $2
+        AND NOT EXISTS (SELECT 1 FROM tickets WHERE zone_id = z.id)
+      RETURNING id, name
+    ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $3, 'zone.deleted', $4, id, name FROM deleted)
+    SELECT id FROM deleted
+  `, [zoneId, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export async function createGate(eventId: string, name: string, actor: string) {
+  await ensureSeeded();
+  const id = `gate-${randomUUID()}`;
+  const rows = await getSql().query(`WITH created AS (
+    INSERT INTO gates (id, event_id, name) SELECT $1, id, $2 FROM events WHERE id = $3 AND status <> 'archived' RETURNING id
+  ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $4, 'gate.created', $5, id, $2 FROM created) SELECT id FROM created`, [id, name, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return rows[0] ?? null;
+}
+
+export async function updateGate(eventId: string, gateId: string, name: string, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`WITH updated AS (
+    UPDATE gates SET name = $1 WHERE id = $2 AND event_id = $3 RETURNING id
+  ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $4, 'gate.updated', $5, id, $1 FROM updated) SELECT id FROM updated`, [name, gateId, eventId, randomUUID(), actor]) as Array<{ id: string }>;
+  return Boolean(rows[0]);
+}
+
+export async function deleteGate(eventId: string, gateId: string, actor: string) {
+  await ensureSeeded();
+  const rows = await getSql().query(`WITH deleted AS (
+    DELETE FROM gates g WHERE id = $1 AND event_id = $2
+      AND NOT EXISTS (SELECT 1 FROM scans WHERE gate_id = g.id) RETURNING id, name
+  ), audited AS (INSERT INTO audit_events (id, action, actor, subject_id, detail) SELECT $3, 'gate.deleted', $4, id, name FROM deleted) SELECT id FROM deleted`, [gateId, eventId, randomUUID(), actor]) as Array<{ id: string }>;
   return Boolean(rows[0]);
 }

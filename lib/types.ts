@@ -70,6 +70,10 @@ export type AppState = {
   gates: GateRecord[];
   tickets: TicketRecord[];
   scans: ScanRecord[];
+  readiness: {
+    ready: boolean;
+    checks: Array<{ id: string; label: string; ok: boolean; detail: string }>;
+  };
   metrics: {
     allocated: number;
     admitted: number;

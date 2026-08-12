@@ -9,3 +9,5 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ticket_primary_colour" text DEFAU
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ticket_accent_colour" text DEFAULT '#dc162f' NOT NULL;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "tickets_event_nric_idx" ON "tickets" USING btree ("event_id", "nric_hash");
+--> statement-breakpoint
+UPDATE "events" SET "status" = 'live' WHERE "status" NOT IN ('draft', 'live', 'closed', 'archived');

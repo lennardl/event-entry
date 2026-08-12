@@ -1,8 +1,8 @@
 export const ATOMIC_SCAN_SQL = `
   WITH selected_ticket AS (
     SELECT t.id, t.event_id, t.max_entries, t.used_entries
-    FROM tickets t
-    WHERE t.token = $1 AND t.status = 'active'
+    FROM tickets t JOIN events e ON e.id = t.event_id
+    WHERE t.token = $1 AND t.status = 'active' AND e.status = 'live'
   ), claimed AS (
     INSERT INTO scan_requests (id, fingerprint)
     SELECT $2, $7

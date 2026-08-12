@@ -123,3 +123,19 @@ test("database initialization and public ticket refresh avoid repeated full-stat
   assert.doesNotMatch(ticketSource, /getState/);
   assert.match(ticketSource, /findEventById/);
 });
+
+test("event setup batch one has real scoped mutations and live-only admissions", async () => {
+  const [storeSource, actionSource, scanSql, uiSource] = await Promise.all([
+    readFile("lib/store.ts", "utf8"), readFile("app/api/actions/route.ts", "utf8"),
+    readFile("lib/scan-sql.ts", "utf8"), readFile("app/ui/NdpApp.tsx", "utf8"),
+  ]);
+  for (const operation of ["updateEvent", "setEventStatus", "createZone", "updateZone", "deleteZone", "createGate", "updateGate", "deleteGate"]) {
+    assert.match(storeSource, new RegExp(`export async function ${operation}`));
+    assert.match(actionSource, new RegExp(`case \\"${operation}\\"`));
+  }
+  assert.match(scanSql, /e\.status = 'live'/);
+  assert.match(uiSource, /function EventDetailsDialog/);
+  assert.match(uiSource, /function ZoneManager/);
+  assert.match(uiSource, /function GateManager/);
+  assert.match(uiSource, /readiness\.checks/);
+});
