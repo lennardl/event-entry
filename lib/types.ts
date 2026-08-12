@@ -6,6 +6,17 @@ export type TicketTheme = {
   instructions: string;
   primaryColour: string;
   accentColour: string;
+  logoDataUrl: string;
+  supportContact: string;
+  terms: string;
+};
+
+export type TicketPolicy = {
+  allowETickets: boolean;
+  allowPhysical: boolean;
+  allowGroups: boolean;
+  maxGroupSize: number;
+  allowRegeneration: boolean;
 };
 
 export type EventRecord = {
@@ -17,6 +28,7 @@ export type EventRecord = {
   entryWindowStart: string;
   entryWindowEnd: string;
   ticketTheme: TicketTheme;
+  ticketPolicy: TicketPolicy;
 };
 
 export type EventSummary = EventRecord & {
@@ -32,6 +44,7 @@ export type ZoneRecord = {
 };
 
 export type GateRecord = { id: string; name: string };
+export type GateAccessRecord = { id: string; gateId: string; gateName: string; label: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null; createdAt: string };
 
 export type TicketRecord = {
   id: string;
@@ -68,6 +81,7 @@ export type AppState = {
   events: EventSummary[];
   zones: ZoneRecord[];
   gates: GateRecord[];
+  gateAccessLinks: GateAccessRecord[];
   tickets: TicketRecord[];
   scans: ScanRecord[];
   readiness: {

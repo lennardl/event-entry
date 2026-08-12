@@ -139,3 +139,23 @@ test("event setup batch one has real scoped mutations and live-only admissions",
   assert.match(uiSource, /function GateManager/);
   assert.match(uiSource, /readiness\.checks/);
 });
+
+test("event setup batch two scopes device access, duplication, branding, and ticket policy", async () => {
+  const [migration, storeSource, actionSource, scannerSource, uiSource] = await Promise.all([
+    readFile("drizzle/0003_event_configuration.sql", "utf8"), readFile("lib/store.ts", "utf8"),
+    readFile("app/api/actions/route.ts", "utf8"), readFile("app/api/scanner/scan/route.ts", "utf8"),
+    readFile("app/ui/NdpApp.tsx", "utf8"),
+  ]);
+  assert.match(migration, /allow_group_tickets/);
+  assert.match(migration, /last_used_at/);
+  for (const operation of ["duplicateEvent", "updateTicketPolicy", "revokeAllGateAccess"]) assert.match(storeSource, new RegExp(`export async function ${operation}`));
+  assert.match(storeSource, /allow_ticket_regeneration/);
+  assert.match(storeSource, /e\.allow_e_tickets/);
+  assert.match(actionSource, /data:image/);
+  assert.match(actionSource, /png\|jpeg\|webp/);
+  assert.match(actionSource, /max\(350_000\)/);
+  assert.match(scannerSource, /markGateAccessUsed/);
+  assert.match(uiSource, /function TicketPolicyDialog/);
+  assert.match(uiSource, /function DuplicateEventDialog/);
+  assert.match(uiSource, /Revoke all active/);
+});

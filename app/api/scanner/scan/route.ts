@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../../db";
-import { consumeTicket, getGateAccess } from "../../../../lib/store";
+import { consumeTicket, getGateAccess, markGateAccessUsed } from "../../../../lib/store";
 
 const schema = z.object({ token: z.string().trim().min(16).max(256), quantity: z.number().int().min(1).max(6), requestId: z.string().uuid() });
 const MAX_BODY_BYTES = 2048;
@@ -26,6 +26,7 @@ export async function POST(request: Request) {
     const access = await getGateAccess(accessToken);
     if (!access) return json({ error: "Scanner access has expired or was revoked" }, { status: 401 });
     const result = await consumeTicket({ token: body.data.token, quantity: body.data.quantity, gateId: access.gateId, mode: "online", requestId: body.data.requestId, operator: `Gate scanner (${access.gateName})` });
+    await markGateAccessUsed(access.id).catch((error) => console.error("Could not update scanner last-used time", error));
     return json(result);
   } catch (error) {
     const databaseError = error instanceof DatabaseConfigurationError;
