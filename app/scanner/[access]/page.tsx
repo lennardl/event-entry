@@ -31,13 +31,13 @@ export default function GateScannerPage({ params }: { params: Promise<{ access: 
   function readPending() { return readStored<PendingScan[]>(pendingKey, []); }
   function writePending(items: PendingScan[]) { writeStored(pendingKey, items); setPendingCount(items.length); }
   async function downloadPack() {
-    const response = await fetch(`/api/scanner/pack?access=${encodeURIComponent(accessToken)}`, { cache: "no-store" });
+    const response = await fetch("/api/scanner/pack", { cache: "no-store", headers: { "x-gate-access": accessToken } });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     writeStored(storageKey, data);
   }
   async function submit(item: PendingScan) {
-    const response = await fetch("/api/scanner/scan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ access: accessToken, token: item.token, quantity: item.quantity, requestId: item.requestId }) });
+    const response = await fetch("/api/scanner/scan", { method: "POST", headers: { "content-type": "application/json", "x-gate-access": accessToken }, body: JSON.stringify({ token: item.token, quantity: item.quantity, requestId: item.requestId }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     return data as Result;
@@ -45,7 +45,7 @@ export default function GateScannerPage({ params }: { params: Promise<{ access: 
   async function checkConnection() {
     if (!accessToken) return;
     try {
-      const response = await fetch(`/api/scanner/access?access=${encodeURIComponent(accessToken)}`, { cache: "no-store" });
+      const response = await fetch("/api/scanner/access", { cache: "no-store", headers: { "x-gate-access": accessToken } });
       if (!response.ok) throw new Error("Scanner access is unavailable");
       const data = await response.json();
       setAccess(data.access); setOnline(true);

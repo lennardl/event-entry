@@ -1,5 +1,13 @@
 export type Role = "Super Admin" | "Admin" | "Gate Supervisor" | "Command Centre Viewer";
 
+export type TicketTheme = {
+  brandName: string;
+  ticketTitle: string;
+  instructions: string;
+  primaryColour: string;
+  accentColour: string;
+};
+
 export type EventRecord = {
   id: string;
   name: string;
@@ -8,6 +16,12 @@ export type EventRecord = {
   capacity: number;
   entryWindowStart: string;
   entryWindowEnd: string;
+  ticketTheme: TicketTheme;
+};
+
+export type EventSummary = EventRecord & {
+  ticketCount: number;
+  admitted: number;
 };
 
 export type ZoneRecord = {
@@ -21,6 +35,7 @@ export type GateRecord = { id: string; name: string };
 
 export type TicketRecord = {
   id: string;
+  eventId: string;
   maskedNric: string;
   mobile: string;
   zoneId: string;
@@ -50,6 +65,7 @@ export type ScanRecord = {
 
 export type AppState = {
   event: EventRecord;
+  events: EventSummary[];
   zones: ZoneRecord[];
   gates: GateRecord[];
   tickets: TicketRecord[];

@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../db";
 import { isAuthenticatedRequest, isSameOriginRequest } from "../../../lib/auth";
-import { consumeTicket, createGateAccessLink, findTicketsByNric, importTickets, regenerateTicket, revokeGateAccessLink } from "../../../lib/store";
+import { consumeTicket, createEvent, createGateAccessLink, findTicketsByNric, importTickets, regenerateTicket, revokeGateAccessLink, updateTicketTheme } from "../../../lib/store";
+
+const eventIdSchema = z.string().trim().min(1).max(80).regex(/^evt-[a-zA-Z0-9-]+$/);
 
 const scanSchema = z.object({
   action: z.literal("scan"),
@@ -14,6 +16,7 @@ const scanSchema = z.object({
 
 const lookupSchema = z.object({
   action: z.literal("lookup"),
+  eventId: eventIdSchema,
   nric: z.string().trim().toUpperCase().regex(/^[STFGM]\d{7}[A-Z]$/),
 });
 
@@ -25,6 +28,7 @@ const regenerateSchema = z.object({
 
 const importSchema = z.object({
   action: z.literal("import"),
+  eventId: eventIdSchema,
   rows: z.array(z.object({
     nric: z.string().trim().toUpperCase().regex(/^[STFGM]\d{7}[A-Z]$/),
     mobile: z.string().trim().regex(/^\+?[\d ]{8,16}$/),
@@ -36,10 +40,32 @@ const importSchema = z.object({
   message: "An import can create at most 5,000 ticket records",
 });
 
-const createGateAccessSchema = z.object({ action: z.literal("createGateAccess"), gateId: z.string().trim().min(1).max(80) });
+const createGateAccessSchema = z.object({ action: z.literal("createGateAccess"), eventId: eventIdSchema, gateId: z.string().trim().min(1).max(80) });
 const revokeGateAccessSchema = z.object({ action: z.literal("revokeGateAccess"), accessId: z.string().uuid() });
+const colourSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+function contrastWithWhite(hex: string) {
+  const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255).map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4);
+  const luminance = .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+  return 1.05 / (luminance + .05);
+}
+const updateTicketThemeSchema = z.object({
+  action: z.literal("updateTicketTheme"), eventId: eventIdSchema,
+  brandName: z.string().trim().min(2).max(50),
+  ticketTitle: z.string().trim().min(3).max(80),
+  instructions: z.string().trim().min(10).max(300),
+  primaryColour: colourSchema, accentColour: colourSchema,
+}).refine((value) => contrastWithWhite(value.primaryColour) >= 4.5, { message: "Primary colour needs stronger contrast with white text", path: ["primaryColour"] });
+const createEventSchema = z.object({
+  action: z.literal("createEvent"),
+  name: z.string().trim().min(3).max(120),
+  venue: z.string().trim().min(2).max(120),
+  status: z.enum(["draft", "live", "closed"]),
+  capacity: z.number().int().min(1).max(250_000),
+  entryWindowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  entryWindowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+}).refine((value) => value.entryWindowEnd > value.entryWindowStart, { message: "Entry end time must be after start time", path: ["entryWindowEnd"] });
 
-const actionSchema = z.discriminatedUnion("action", [scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema]);
+const actionSchema = z.discriminatedUnion("action", [scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, createEventSchema, updateTicketThemeSchema]);
 
 function json(data: unknown, init?: ResponseInit) {
   const response = Response.json(data, init);
@@ -66,15 +92,19 @@ export async function POST(request: Request) {
       case "scan":
         return json(await consumeTicket({ ...body, operator }));
       case "lookup":
-        return json({ tickets: await findTicketsByNric(body.nric) });
+        return json({ tickets: await findTicketsByNric(body.nric, body.eventId) });
       case "regenerate":
         return json({ result: await regenerateTicket(body.ticketId, body.expectedVersion, operator) });
       case "import":
-        return json(await importTickets(body.rows, operator));
+        return json(await importTickets(body.rows, body.eventId, operator));
       case "createGateAccess":
-        return json({ access: await createGateAccessLink(body.gateId, operator) });
+        return json({ access: await createGateAccessLink(body.gateId, body.eventId, operator) });
       case "revokeGateAccess":
         return json({ revoked: await revokeGateAccessLink(body.accessId, operator) });
+      case "createEvent":
+        return json({ event: await createEvent(body, operator) }, { status: 201 });
+      case "updateTicketTheme":
+        return json({ updated: await updateTicketTheme(body.eventId, body, operator) });
     }
   } catch (error) {
     console.error("Action request failed", error);

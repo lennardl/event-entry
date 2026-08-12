@@ -17,7 +17,7 @@ async function scan(requestId, quantity = 1) {
   return (await pool.query(EXISTING_SCAN_SQL, [requestId, fingerprint])).rows[0];
 }
 
-suite.before(async () => {
+if (connectionString) test.before(async () => {
   const migrationFiles = (await readdir("drizzle")).filter((file) => file.endsWith(".sql")).sort();
   for (const migrationFile of migrationFiles) {
     const migration = (await readFile(`drizzle/${migrationFile}`, "utf8")).replaceAll("--> statement-breakpoint", "");
@@ -29,11 +29,11 @@ suite.before(async () => {
   await pool.query("INSERT INTO tickets (id, event_id, nric_hash, masked_nric, mobile, zone_id, format, max_entries, token) VALUES ('ticket-test', 'evt-test', 'hash', 'masked', '90000000', 'zone-test', 'e-ticket', 6, 'EVT.test.atomic')");
 });
 
-suite.after(async () => {
+if (connectionString) test.after(async () => {
   await pool?.end();
 });
 
-suite.beforeEach(async () => {
+if (connectionString) test.beforeEach(async () => {
   await pool.query("DELETE FROM scans");
   await pool.query("DELETE FROM scan_requests");
   await pool.query("UPDATE tickets SET used_entries = 0, max_entries = 6 WHERE id = 'ticket-test'");

@@ -1,9 +1,10 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AppState, Role, TicketRecord } from "../../lib/types";
+import { readStored, removeStored, writeStored } from "../../lib/browser-storage";
 import "./ndp.css";
 import "./a11y.css";
 
@@ -14,6 +15,8 @@ type PendingScan = { id: string; token: string; quantity: number; gateId: string
 const OFFLINE_PACK_KEY = "event-entry-offline-pack:v1";
 const PENDING_SCANS_KEY = "event-entry-pending-scans:v1";
 const OFFLINE_PACK_LIFETIME_MS = 4 * 60 * 60 * 1000;
+const timeFormatter = new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const numberFormatter = new Intl.NumberFormat("en-SG");
 
 const roles: Role[] = ["Super Admin", "Admin", "Gate Supervisor", "Command Centre Viewer"];
 const viewAccess: Record<View, Role[]> = {
@@ -33,17 +36,17 @@ const navItems: Array<{ id: View; label: string; marker: string }> = [
 ];
 
 function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(value));
+  return timeFormatter.format(new Date(value));
 }
 
 function compactNumber(value: number) {
-  return new Intl.NumberFormat("en-SG").format(value);
+  return numberFormatter.format(value);
 }
 
 async function requestAction(body: Record<string, unknown>) {
   const response = await fetch("/api/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Action failed");
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Action failed. Please try again.");
   return data;
 }
 
@@ -51,15 +54,18 @@ function registerServiceWorker() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
 }
 
-export function NdpApp() {
+export function NdpApp({ initialState = null, initialError = null }: { initialState?: AppState | null; initialError?: string | null }) {
   const router = useRouter();
-  const [state, setState] = useState<AppState | null>(null);
+  const [state, setState] = useState<AppState | null>(initialState);
   const [view, setView] = useState<View>("overview");
   const [role, setRole] = useState<Role>("Super Admin");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(!initialState);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(initialError);
   const [selectedTicket, setSelectedTicket] = useState<TicketRecord | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const loadInFlight = useRef<Promise<void> | null>(null);
+  const currentEventId = useRef(initialState?.event.id);
 
   async function signOut() {
     await fetch("/api/session", { method: "DELETE" });
@@ -67,40 +73,68 @@ export function NdpApp() {
     router.refresh();
   }
 
-  const load = useCallback(async () => {
-    try {
-      const response = await fetch("/api/state", { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not load operations data");
-      setState(data);
-      setError(null);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Could not load operations data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback((eventId?: string) => {
+    if (loadInFlight.current) return loadInFlight.current;
+    setRefreshing(true);
+    const request = (async () => {
+      try {
+        const selectedEventId = eventId ?? currentEventId.current;
+        const response = await fetch(selectedEventId ? `/api/state?eventId=${encodeURIComponent(selectedEventId)}` : "/api/state", { cache: "no-store" });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Could not load operations data");
+        setState(data as AppState);
+        currentEventId.current = (data as AppState).event.id;
+        setError(null);
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : "Could not load operations data");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+        loadInFlight.current = null;
+      }
+    })();
+    loadInFlight.current = request;
+    return request;
+  }, [router]);
 
   useEffect(() => {
     registerServiceWorker();
     const queryView = new URLSearchParams(window.location.search).get("view") as View | null;
     if (queryView && navItems.some((item) => item.id === queryView)) queueMicrotask(() => setView(queryView));
-    queueMicrotask(() => void load());
-  }, [load]);
+    if (!initialState) queueMicrotask(() => void load());
+  }, [initialState, load]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setSidebarOpen(false); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [sidebarOpen]);
 
   function navigate(next: View) {
     if (!viewAccess[next].includes(role)) return;
     setView(next);
     setSidebarOpen(false);
-    window.history.replaceState(null, "", `/?view=${next}`);
+    window.history.replaceState(null, "", `/?view=${next}&event=${encodeURIComponent(state?.event.id ?? "")}`);
+  }
+
+  async function switchEvent(eventId: string) {
+    setSelectedTicket(null);
+    await load(eventId);
+    window.history.replaceState(null, "", `/?view=${view}&event=${encodeURIComponent(eventId)}`);
   }
 
   if (loading) return <LoadingScreen />;
-  if (!state || error) return <ErrorScreen message={error || "No event data found"} retry={load} />;
+  if (!state) return <ErrorScreen message={error || "No event data found"} retry={load} />;
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+      {sidebarOpen ? <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} /> : null}
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`} aria-label="Operations navigation">
         <div className="brand-block">
           <div className="brand-mark"><span>SG</span><small>60+</small></div>
           <div><strong>Event Entry</strong><span>Operations control</span></div>
@@ -123,10 +157,12 @@ export function NdpApp() {
 
       <main className="main-area">
         <header className="topbar">
-          <button className="menu-button" onClick={() => setSidebarOpen((open) => !open)} aria-label="Toggle navigation">☰</button>
+          <button className="menu-button" onClick={() => setSidebarOpen((open) => !open)} aria-label="Toggle navigation" aria-expanded={sidebarOpen}>☰</button>
           <div className="event-switcher">
             <span className="eyebrow">Active show</span>
-            <strong>{state.event.name}</strong>
+            <select value={state.event.id} onChange={(event) => void switchEvent(event.target.value)} aria-label="Active event">
+              {state.events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}
+            </select>
             <span>{state.event.venue} · {state.event.entryWindowStart}–{state.event.entryWindowEnd}</span>
           </div>
           <div className="topbar-actions">
@@ -146,11 +182,12 @@ export function NdpApp() {
         </header>
 
         <div className="content">
+          {error ? <div className="refresh-alert" role="status"><span><strong>Live data could not refresh.</strong> Showing the last successful update.</span><button onClick={() => void load()} disabled={refreshing}>{refreshing ? "Retrying…" : "Retry"}</button></div> : null}
           {view === "overview" ? <Overview state={state} refresh={load} /> : null}
-          {view === "tickets" ? <Tickets state={state} refresh={load} onSelect={setSelectedTicket} role={role} /> : null}
-          {view === "scanner" ? <Scanner state={state} refresh={load} /> : null}
-          {view === "exceptions" ? <Exceptions state={state} refresh={load} role={role} /> : null}
-          {view === "events" ? <EventSetup state={state} /> : null}
+          {view === "tickets" ? <Tickets key={state.event.id} state={state} refresh={load} onSelect={setSelectedTicket} role={role} /> : null}
+          {view === "scanner" ? <Scanner key={state.event.id} state={state} refresh={load} /> : null}
+          {view === "exceptions" ? <Exceptions key={state.event.id} state={state} refresh={load} role={role} /> : null}
+          {view === "events" ? <EventSetup key={state.event.id} state={state} onEventCreated={switchEvent} /> : null}
         </div>
       </main>
       {selectedTicket ? <TicketDrawer ticket={selectedTicket} event={state.event} onClose={() => setSelectedTicket(null)} refresh={load} role={role} /> : null}
@@ -168,11 +205,16 @@ function ErrorScreen({ message, retry }: { message: string; retry: () => Promise
 
 function Overview({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
   const pct = state.event.capacity ? Math.round((state.metrics.admitted / state.event.capacity) * 1000) / 10 : 0;
-  const zoneStats = state.zones.map((zone) => {
-    const allocated = state.tickets.filter((ticket) => ticket.zoneId === zone.id).reduce((sum, ticket) => sum + ticket.maxEntries, 0);
-    const admitted = state.tickets.filter((ticket) => ticket.zoneId === zone.id).reduce((sum, ticket) => sum + ticket.usedEntries, 0);
-    return { ...zone, allocated, admitted };
-  });
+  const zoneStats = useMemo(() => {
+    const totals = new Map<string, { allocated: number; admitted: number }>();
+    for (const ticket of state.tickets) {
+      const current = totals.get(ticket.zoneId) ?? { allocated: 0, admitted: 0 };
+      current.allocated += ticket.maxEntries;
+      current.admitted += ticket.usedEntries;
+      totals.set(ticket.zoneId, current);
+    }
+    return state.zones.map((zone) => ({ ...zone, ...(totals.get(zone.id) ?? { allocated: 0, admitted: 0 }) }));
+  }, [state.tickets, state.zones]);
   return (
     <section>
       <PageHeading eyebrow="Command centre" title="Entry operations at a glance" subtitle="Live attendance, gate throughput and issues requiring attention." action={<button className="secondary-button" onClick={() => void refresh()}>↻ Refresh</button>} />
@@ -270,25 +312,31 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const pack = (() => {
-    if (typeof window === "undefined") return null;
-    try { return JSON.parse(localStorage.getItem(OFFLINE_PACK_KEY) || "null") as { updatedAt: string; expiresAt: string; tickets: Array<{ token: string; id: string; zoneName: string; zoneColour: string; remainingEntries: number; status: string }> } | null; } catch { return null; }
-  })();
-
-  const pendingCount = typeof window === "undefined" ? 0 : (() => { try { return (JSON.parse(localStorage.getItem(PENDING_SCANS_KEY) || "[]") as PendingScan[]).length; } catch { return 0; } })();
+  const [pack, setPack] = useState<{ updatedAt: string; expiresAt: string; tickets: Array<{ token: string; id: string; zoneName: string; zoneColour: string; remainingEntries: number; status: string }> } | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
-    if (!navigator.onLine) return;
+    if (!navigator.onLine) {
+      try {
+        const storedPack = readStored(OFFLINE_PACK_KEY, null);
+        const storedPendingCount = readStored<PendingScan[]>(PENDING_SCANS_KEY, []).length;
+        queueMicrotask(() => { setPack(storedPack); setPendingCount(storedPendingCount); });
+      } catch { /* Ignore unavailable or corrupt browser storage. */ }
+      return;
+    }
     const now = new Date();
+    const nextPack = {
+      updatedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + OFFLINE_PACK_LIFETIME_MS).toISOString(),
+      eventId: state.event.id,
+      tickets: state.tickets.map((item) => ({ token: item.token, id: item.id, zoneName: item.zoneName, zoneColour: item.zoneColour, remainingEntries: item.remainingEntries, status: item.status })),
+    };
     try {
-      localStorage.setItem(OFFLINE_PACK_KEY, JSON.stringify({
-        updatedAt: now.toISOString(),
-        expiresAt: new Date(now.getTime() + OFFLINE_PACK_LIFETIME_MS).toISOString(),
-        eventId: state.event.id,
-        tickets: state.tickets.map((item) => ({ token: item.token, id: item.id, zoneName: item.zoneName, zoneColour: item.zoneColour, remainingEntries: item.remainingEntries, status: item.status })),
-      }));
-      localStorage.removeItem("ndp-offline-pack");
-      localStorage.removeItem("ndp-pending-scans");
+      writeStored(OFFLINE_PACK_KEY, nextPack);
+      removeStored("ndp-offline-pack");
+      removeStored("ndp-pending-scans");
+      const storedPendingCount = readStored<PendingScan[]>(PENDING_SCANS_KEY, []).length;
+      queueMicrotask(() => { setPack(nextPack); setPendingCount(storedPendingCount); });
     } catch { /* Browser storage may be unavailable on restricted devices. */ }
   }, [state]);
 
@@ -303,7 +351,7 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
   const syncPending = useCallback(async () => {
     if (!navigator.onLine) return;
     let pending: PendingScan[] = [];
-    try { pending = JSON.parse(localStorage.getItem(PENDING_SCANS_KEY) || "[]") as PendingScan[]; } catch { return; }
+    pending = readStored<PendingScan[]>(PENDING_SCANS_KEY, []);
     if (!pending.length) return;
     setSyncMessage(`Syncing ${pending.length} offline scan${pending.length === 1 ? "" : "s"}…`);
     const unresolved: PendingScan[] = [];
@@ -313,7 +361,8 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
         if (!response.ok) unresolved.push(item);
       } catch { unresolved.push(item); }
     }
-    localStorage.setItem(PENDING_SCANS_KEY, JSON.stringify(unresolved));
+    writeStored(PENDING_SCANS_KEY, unresolved);
+    setPendingCount(unresolved.length);
     setSyncMessage(unresolved.length ? `${unresolved.length} scan conflict${unresolved.length === 1 ? "" : "s"} need review` : "Offline scans synchronised");
     await refresh();
   }, [refresh]);
@@ -369,16 +418,17 @@ function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<v
     }
     const localTicket = pack?.tickets.find((item) => item.token === ticket.token);
     // This check runs only after the operator confirms an offline admission.
-    // eslint-disable-next-line react-hooks/purity
     if (!pack?.expiresAt || Date.parse(pack.expiresAt) <= Date.now()) { setResult({ ok: false, reason: "Offline pack has expired. Move the attendee to the exception queue." }); return; }
     if (!localTicket || localTicket.status !== "active") { setResult({ ok: false, reason: "Ticket is not valid in this offline pack" }); return; }
     if (quantity > localTicket.remainingEntries) { setResult({ ok: false, reason: `Only ${localTicket.remainingEntries} admission${localTicket.remainingEntries === 1 ? "" : "s"} remaining on this device` }); return; }
     localTicket.remainingEntries -= quantity;
     const storedPack = { ...pack, tickets: pack?.tickets || [] };
-    localStorage.setItem(OFFLINE_PACK_KEY, JSON.stringify(storedPack));
-    const queued: PendingScan[] = JSON.parse(localStorage.getItem(PENDING_SCANS_KEY) || "[]");
+    writeStored(OFFLINE_PACK_KEY, storedPack);
+    setPack(storedPack);
+    const queued = readStored<PendingScan[]>(PENDING_SCANS_KEY, []);
     queued.push({ id: crypto.randomUUID(), token: ticket.token, quantity, gateId, createdAt: new Date().toISOString() });
-    localStorage.setItem(PENDING_SCANS_KEY, JSON.stringify(queued));
+    writeStored(PENDING_SCANS_KEY, queued);
+    setPendingCount(queued.length);
     setResult({ ok: true, ticketId: ticket.id, zoneName: ticket.zoneName, quantity, remaining: localTicket.remainingEntries });
     setTicket(null);
   }
@@ -432,7 +482,7 @@ function Exceptions({ state, refresh, role }: { state: AppState; refresh: () => 
   const [matches, setMatches] = useState<TicketRecord[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   async function lookup() {
-    const response = await requestAction({ action: "lookup", nric });
+    const response = await requestAction({ action: "lookup", eventId: state.event.id, nric });
     setMatches(response.tickets);
     setMessage(response.tickets.length ? null : "No allocation found for that NRIC.");
   }
@@ -445,16 +495,63 @@ function Exceptions({ state, refresh, role }: { state: AppState; refresh: () => 
   return <section><PageHeading eyebrow="Resolution queue" title="Help without blocking the gate" subtitle="Look up the original allocation, regenerate access or record a supervised manual entry." /><div className="exceptions-grid"><article className="panel lookup-panel"><div className="panel-title"><div><span className="eyebrow">NRIC recovery</span><h2>Find a ticket allocation</h2></div></div><p>Exact lookup only. NRIC is never stored in the scanner’s offline pack.</p><label><span>Recipient NRIC</span><div className="input-action"><input value={nric} onChange={(event) => setNric(event.target.value.toUpperCase())} placeholder="S1234567D" /><button className="primary-button" onClick={() => void lookup()}>Find allocation</button></div></label><div className="sample-hint">POC sample: <button onClick={() => setNric("S1234567D")}>S1234567D</button></div>{message ? <div className="inline-message">{message}</div> : null}{matches?.map((ticket) => <div className="lookup-result" key={ticket.id}><div><span className="zone-dot" style={{ background: ticket.zoneColour }} /><strong>{ticket.id}</strong><small>{ticket.zoneName} · {ticket.format}</small></div><div><strong>{ticket.remainingEntries} remaining</strong><span>{ticket.maskedNric}</span></div><button disabled={!ticket.remainingEntries} onClick={() => void manualAdmit(ticket)}>Manual admit 1</button></div>)}</article><article className="panel exception-feed"><div className="panel-title"><div><span className="eyebrow">Recent exceptions</span><h2>Denied and manual actions</h2></div></div><ScanTable scans={state.scans.filter((scan) => scan.result === "denied" || scan.mode === "manual")} empty="No exceptions recorded yet." /></article></div></section>;
 }
 
-function EventSetup({ state }: { state: AppState }) {
+function EventSetup({ state, onEventCreated }: { state: AppState; onEventCreated: (eventId: string) => Promise<void> }) {
   const [selection, setSelection] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [themeOpen, setThemeOpen] = useState(false);
   const router = useRouter();
   const ready = state.gates.length && state.zones.length && !state.metrics.deniedAttempts;
-  return <section><PageHeading eyebrow="Event setup" title="Set up this event" subtitle="Confirm the event, entry zones, gates and scanner access before doors open." /><div className="setup-grid"><SetupCard eyebrow="Event details" title={state.event.name} detail={`${state.event.venue} · ${state.event.entryWindowStart}–${state.event.entryWindowEnd}`} metric={`${compactNumber(state.event.capacity)} capacity`} action="Review event" onAction={() => setSelection("Event details")} /><SetupCard eyebrow="Entry zones" title={`${state.zones.length} zones configured`} detail={`${compactNumber(state.event.capacity)} total admission capacity`} metric="Ready" action="Manage zones" onAction={() => setSelection("Entry zones")} /><SetupCard eyebrow="Gates and devices" title={`${state.gates.length} gates ready`} detail="Every gate accepts every zone, online or offline." metric="Ready" action="Manage gates" onAction={() => setSelection("Gates and devices")} /><GateAccessLauncher gates={state.gates} /><SetupCard eyebrow="Readiness" title={ready ? "Ready for gates" : "Needs attention"} detail={ready ? "All gates and zones are configured. No current exceptions." : `${state.metrics.deniedAttempts} exception${state.metrics.deniedAttempts === 1 ? "" : "s"} need review.`} metric={`${state.metrics.offlineAdmissions} offline syncs`} action="Open command overview" onAction={() => router.push("/?view=overview")} /></div>{selection ? <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="setup-title"><button className="drawer-close" onClick={() => setSelection(null)}>×</button><span className="eyebrow">Event setup</span><h2 id="setup-title">{selection}</h2><p>This POC now groups configuration by outcome. Detailed editing can be added here without exposing internal delivery dependencies.</p><div className="modal-actions"><button className="primary-button" onClick={() => setSelection(null)}>Done</button></div></div></div> : null}</section>;
+  return <section><PageHeading eyebrow="Event setup" title="Set up this event" subtitle="Create events and configure each event’s zones, gates, tickets and scanner access." action={<button className="primary-button" onClick={() => setCreateOpen(true)}>＋ Create event</button>} /><article className="panel event-list"><div className="panel-title"><div><span className="eyebrow">All events</span><h2>{state.events.length} configured</h2></div></div>{state.events.map((event) => <div key={event.id} className={event.id === state.event.id ? "event-list-row active" : "event-list-row"}><div><strong>{event.name}</strong><span>{event.venue} · {event.entryWindowStart}–{event.entryWindowEnd}</span></div><span className={`status-label ${event.status === "live" ? "allowed" : ""}`}>{event.status}</span><span>{compactNumber(event.ticketCount)} tickets · {compactNumber(event.admitted)} admitted</span>{event.id === state.event.id ? <strong>Active</strong> : <button onClick={() => void onEventCreated(event.id)}>Open</button>}</div>)}</article><div className="setup-grid"><SetupCard eyebrow="Event details" title={state.event.name} detail={`${state.event.venue} · ${state.event.entryWindowStart}–${state.event.entryWindowEnd}`} metric={`${compactNumber(state.event.capacity)} capacity`} action="Review event" onAction={() => setSelection("Event details")} /><SetupCard eyebrow="Ticket design" title={state.event.ticketTheme.brandName} detail={state.event.ticketTheme.ticketTitle} metric="Event-specific branding" action="Customise ticket" onAction={() => setThemeOpen(true)} /><SetupCard eyebrow="Entry zones" title={`${state.zones.length} zones configured`} detail={`${compactNumber(state.event.capacity)} total admission capacity`} metric="Ready" action="Manage zones" onAction={() => setSelection("Entry zones")} /><SetupCard eyebrow="Gates and devices" title={`${state.gates.length} gates ready`} detail="Every gate accepts every zone, online or offline." metric="Ready" action="Manage gates" onAction={() => setSelection("Gates and devices")} /><GateAccessLauncher gates={state.gates} eventId={state.event.id} /><SetupCard eyebrow="Readiness" title={ready ? "Ready for gates" : "Needs attention"} detail={ready ? "All gates and zones are configured. No current exceptions." : `${state.metrics.deniedAttempts} exception${state.metrics.deniedAttempts === 1 ? "" : "s"} need review.`} metric={`${state.metrics.offlineAdmissions} offline syncs`} action="Open command overview" onAction={() => router.push(`/?view=overview&event=${encodeURIComponent(state.event.id)}`)} /></div>{createOpen ? <CreateEventDialog onClose={() => setCreateOpen(false)} onCreated={async (eventId) => { setCreateOpen(false); await onEventCreated(eventId); }} /> : null}{themeOpen ? <TicketThemeDialog event={state.event} onClose={() => setThemeOpen(false)} onSaved={async () => { setThemeOpen(false); await onEventCreated(state.event.id); }} /> : null}{selection ? <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="setup-title"><button className="drawer-close" onClick={() => setSelection(null)}>×</button><span className="eyebrow">Event setup</span><h2 id="setup-title">{selection}</h2><p>Detailed editing for this event can be added here without affecting other event ledgers.</p><div className="modal-actions"><button className="primary-button" onClick={() => setSelection(null)}>Done</button></div></div></div> : null}</section>;
+}
+
+function TicketThemeDialog({ event, onClose, onSaved }: { event: AppState["event"]; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [theme, setTheme] = useState(event.ticketTheme);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const update = (field: keyof typeof theme, value: string) => setTheme((current) => ({ ...current, [field]: value }));
+  async function save() {
+    setBusy(true); setError(null);
+    try {
+      await requestAction({ action: "updateTicketTheme", eventId: event.id, ...theme });
+      await onSaved();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Ticket design could not be saved");
+      setBusy(false);
+    }
+  }
+  return <div className="modal-backdrop"><div className="modal ticket-theme-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-theme-title"><button className="drawer-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">Ticket design</span><h2 id="ticket-theme-title">Customise {event.name}</h2><div className="theme-editor"><div className="event-form form-grid"><label><span>Brand name</span><input value={theme.brandName} maxLength={50} onChange={(e) => update("brandName", e.target.value)} /></label><label><span>Ticket title</span><input value={theme.ticketTitle} maxLength={80} onChange={(e) => update("ticketTitle", e.target.value)} /></label><label><span>Primary colour</span><input type="color" value={theme.primaryColour} onChange={(e) => update("primaryColour", e.target.value)} /></label><label><span>Accent colour</span><input type="color" value={theme.accentColour} onChange={(e) => update("accentColour", e.target.value)} /></label><label className="full"><span>Attendee instructions</span><textarea value={theme.instructions} maxLength={300} rows={4} onChange={(e) => update("instructions", e.target.value)} /></label></div><TicketThemePreview event={event} theme={theme} /></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Saving design…" : "Save ticket design"}</button></div></div></div>;
+}
+
+function TicketThemePreview({ event, theme }: { event: AppState["event"]; theme: AppState["event"]["ticketTheme"] }) {
+  return <div className="theme-preview" style={{ "--ticket-primary": theme.primaryColour, "--ticket-accent": theme.accentColour } as React.CSSProperties}><header><span>{theme.brandName.slice(0, 2).toUpperCase()}</span><div><strong>{theme.brandName}</strong><small>{theme.ticketTitle}</small></div></header><i /><div className="preview-zone">RED ZONE</div><section><small>{event.name}</small><h3>{event.venue}</h3><div className="preview-qr">QR</div><p>{theme.instructions}</p></section></div>;
+}
+
+function CreateEventDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (eventId: string) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError(null);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await requestAction({
+        action: "createEvent",
+        name: form.get("name"), venue: form.get("venue"), status: form.get("status"),
+        capacity: Number(form.get("capacity")), entryWindowStart: form.get("entryWindowStart"), entryWindowEnd: form.get("entryWindowEnd"),
+      });
+      await onCreated(response.event.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Event could not be created");
+      setBusy(false);
+    }
+  }
+  return <div className="modal-backdrop"><form className="modal event-form" role="dialog" aria-modal="true" aria-labelledby="create-event-title" onSubmit={submit}><button type="button" className="drawer-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">Top-level event</span><h2 id="create-event-title">Create a new event</h2><p>A separate operational ledger will be created with four starter zones and four gates.</p><div className="form-grid"><label><span>Event name</span><input name="name" required minLength={3} maxLength={120} placeholder="NDP 2027 — Preview 2" /></label><label><span>Venue</span><input name="venue" required minLength={2} maxLength={120} placeholder="The Padang" /></label><label><span>Status</span><select name="status" defaultValue="draft"><option value="draft">Draft</option><option value="live">Live</option><option value="closed">Closed</option></select></label><label><span>Capacity</span><input name="capacity" type="number" required min={1} max={250000} defaultValue={27000} /></label><label><span>Entry starts</span><input name="entryWindowStart" type="time" required defaultValue="16:00" /></label><label><span>Entry ends</span><input name="entryWindowEnd" type="time" required defaultValue="18:00" /></label></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Creating event…" : "Create event"}</button></div></form></div>;
 }
 
 function SetupCard({ eyebrow, title, detail, metric, action, onAction }: { eyebrow: string; title: string; detail: string; metric: string; action: string; onAction: () => void }) { return <article className="panel setup-card"><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{detail}</p><strong>{metric}</strong><button className="secondary-button" onClick={onAction}>{action}</button></article>; }
 
-function GateAccessLauncher({ gates }: { gates: AppState["gates"] }) {
+function GateAccessLauncher({ gates, eventId }: { gates: AppState["gates"]; eventId: string }) {
   const [open, setOpen] = useState(false);
   const [gateId, setGateId] = useState(gates[0]?.id ?? "");
   const [link, setLink] = useState<string | null>(null);
@@ -462,7 +559,7 @@ function GateAccessLauncher({ gates }: { gates: AppState["gates"] }) {
   const [accessId, setAccessId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   async function generate() {
-    const response = await requestAction({ action: "createGateAccess", gateId });
+    const response = await requestAction({ action: "createGateAccess", eventId, gateId });
     if (!response.access) return;
     const url = `${window.location.origin}/scanner/${response.access.token}`;
     setLink(url); setAccessId(response.access.id); setCopied(false);
@@ -487,7 +584,8 @@ function TicketDrawer({ ticket, event, onClose, refresh, role }: { ticket: Ticke
     await refresh();
   }
   const link = typeof window === "undefined" ? "" : `${window.location.origin}/ticket/${encodeURIComponent(current.token)}`;
-  return <div className="drawer-backdrop" role="button" tabIndex={0} aria-label="Close ticket details" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="ticket-drawer"><button className="drawer-close" onClick={onClose} aria-label="Close ticket">×</button><div className="citizen-ticket" style={{ "--ticket-zone": current.zoneColour } as React.CSSProperties}><div className="ticket-brand"><div className="brand-mark small"><span>SG</span><small>60+</small></div><div><strong>NDP 2027</strong><span>Official admission ticket</span></div></div><div className="ticket-zone"><span>{current.zoneName}</span><strong>ZONE</strong></div><div className="ticket-event"><span>{event.name}</span><h2>{event.venue}</h2><div><span>Entry window</span><strong>{event.entryWindowStart}–{event.entryWindowEnd}</strong></div></div><div className="qr-wrap">{qr ? <img src={qr} alt={`QR code for ${current.id}`} /> : <span>Generating QR…</span>}</div><div className="ticket-count"><strong>{current.remainingEntries}</strong><span>of {current.maxEntries} admissions remaining</span></div><div className="ticket-id">{current.id} · Version {current.version}</div></div><div className="drawer-actions"><a className="wallet-button apple" href={`/api/wallet/apple?ticket=${current.id}`}><span></span><small>Add to</small><strong>Apple Wallet</strong></a><a className="wallet-button google" href={`/api/wallet/google?ticket=${current.id}`}><span>G</span><small>Save to</small><strong>Google Wallet</strong></a><button className="secondary-button full" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); }}>{copied ? "✓ Link copied" : "Copy ticket link"}</button><button className="danger-button" onClick={() => void regenerate()}>Regenerate lost ticket</button><small className="drawer-help">Regenerating immediately invalidates the previous QR while preserving admissions already used.</small></div></aside></div>;
+  const theme = event.ticketTheme;
+  return <div className="drawer-backdrop" role="button" tabIndex={0} aria-label="Close ticket details" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="ticket-drawer"><button className="drawer-close" onClick={onClose} aria-label="Close ticket">×</button><div className="citizen-ticket" style={{ "--ticket-zone": current.zoneColour, "--ticket-primary": theme.primaryColour, "--ticket-accent": theme.accentColour } as React.CSSProperties}><div className="ticket-brand"><div className="brand-mark small" style={{ background: theme.primaryColour }}><span>{theme.brandName.slice(0, 2).toUpperCase()}</span></div><div><strong>{theme.brandName}</strong><span>{theme.ticketTitle}</span></div></div><div className="ticket-theme-accent" /><div className="ticket-zone"><span>{current.zoneName}</span><strong>ZONE</strong></div><div className="ticket-event"><span>{event.name}</span><h2>{event.venue}</h2><div><span>Entry window</span><strong>{event.entryWindowStart}–{event.entryWindowEnd}</strong></div></div><div className="qr-wrap">{qr ? <img src={qr} alt={`QR code for ${current.id}`} /> : <span>Generating QR…</span>}</div><div className="ticket-count"><strong>{current.remainingEntries}</strong><span>of {current.maxEntries} admissions remaining</span></div><p className="ticket-instructions">{theme.instructions}</p><div className="ticket-id">{current.id} · Version {current.version}</div></div><div className="drawer-actions"><a className="wallet-button apple" href={`/api/wallet/apple?ticket=${current.id}`}><span></span><small>Add to</small><strong>Apple Wallet</strong></a><a className="wallet-button google" href={`/api/wallet/google?ticket=${current.id}`}><span>G</span><small>Save to</small><strong>Google Wallet</strong></a><button className="secondary-button full" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); }}>{copied ? "✓ Link copied" : "Copy ticket link"}</button><button className="danger-button" onClick={() => void regenerate()}>Regenerate lost ticket</button><small className="drawer-help">Regenerating immediately invalidates the previous QR while preserving admissions already used.</small></div></aside></div>;
 }
 
 function ImportDialog({ state, onClose, onComplete }: { state: AppState; onClose: () => void; onComplete: () => Promise<void> }) {
@@ -500,7 +598,7 @@ function ImportDialog({ state, onClose, onComplete }: { state: AppState; onClose
       return { nric, mobile, quantity: Number(quantity), zoneId: state.zones.find((zone) => zone.name.toLowerCase() === zoneName.toLowerCase())?.id || state.zones[0].id, format: format === "physical" ? "physical" : "e-ticket" };
     });
     if (rows.some((row) => !row.nric || !row.mobile || row.quantity < 1 || row.quantity > 6)) { setError("Every row needs an NRIC, mobile number and quantity from 1 to 6."); return; }
-    await requestAction({ action: "import", rows });
+    await requestAction({ action: "import", eventId: state.event.id, rows });
     await onComplete();
   }
   return <div className="modal-backdrop"><div className="modal"><button className="drawer-close" onClick={onClose}>×</button><span className="eyebrow">Winner import</span><h2>Upload ticket recipients</h2><p>This POC accepts a pasted CSV. Physical allocations create one QR per admission.</p><textarea value={csv} onChange={(event) => setCsv(event.target.value)} rows={8} spellCheck={false} />{error ? <div className="inline-message error">{error}</div> : null}<div className="modal-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" onClick={() => void submit()}>Validate and issue</button></div></div></div>;

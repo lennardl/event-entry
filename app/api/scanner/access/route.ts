@@ -2,7 +2,7 @@ import { DatabaseConfigurationError } from "../../../../db";
 import { getGateAccess } from "../../../../lib/store";
 
 export async function GET(request: Request) {
-  const token = new URL(request.url).searchParams.get("access") ?? "";
+  const token = request.headers.get("x-gate-access") ?? "";
   if (!token || token.length > 256) return Response.json({ error: "Scanner access has expired" }, { status: 401 });
   try {
     const access = await getGateAccess(token);
