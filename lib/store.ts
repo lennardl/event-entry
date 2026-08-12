@@ -509,6 +509,11 @@ export async function importTickets(rows: ImportRow[], eventId: string, actor: s
   return { created, rejected: records.length - created };
 }
 
+export async function createTicket(row: ImportRow, eventId: string, actor: string) {
+  const result = await importTickets([row], eventId, actor);
+  return { created: result.created === 1, rejected: result.rejected };
+}
+
 export type CreateEventInput = Pick<EventRecord, "name" | "venue" | "status" | "capacity" | "startDate" | "endDate" | "timeZone" | "doorsOpen" | "entryWindowStart" | "entryWindowEnd" | "eventEnd"> & { zoneCount?: number; gateCount?: number };
 
 export async function createEvent(input: CreateEventInput, actor: string) {

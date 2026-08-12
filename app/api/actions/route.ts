@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../db";
 import { authenticatedRole, isSameOriginRequest } from "../../../lib/auth";
-import { consumeTicket, createEvent, createGate, createGateAccessLink, createZone, deleteGate, deleteZone, duplicateEvent, findTicketsByNric, importTickets, regenerateTicket, restoreEvent, revokeAllGateAccess, revokeGateAccessLink, setEventStatus, softDeleteEvent, updateEvent, updateGate, updateTicketPolicy, updateTicketTheme, updateZone } from "../../../lib/store";
+import { consumeTicket, createEvent, createGate, createGateAccessLink, createTicket, createZone, deleteGate, deleteZone, duplicateEvent, findTicketsByNric, importTickets, regenerateTicket, restoreEvent, revokeAllGateAccess, revokeGateAccessLink, setEventStatus, softDeleteEvent, updateEvent, updateGate, updateTicketPolicy, updateTicketTheme, updateZone } from "../../../lib/store";
 
 const eventIdSchema = z.string().trim().min(1).max(80).regex(/^evt-[a-zA-Z0-9-]+$/);
 
@@ -38,6 +38,12 @@ const importSchema = z.object({
   })).min(1).max(1000),
 }).refine((value) => value.rows.reduce((total, row) => total + (row.format === "physical" ? row.quantity : 1), 0) <= 5000, {
   message: "An import can create at most 5,000 ticket records",
+});
+const createTicketSchema = z.object({
+  action: z.literal("createTicket"), eventId: eventIdSchema,
+  nric: z.string().trim().toUpperCase().regex(/^[STFGM]\d{7}[A-Z]$/),
+  mobile: z.string().trim().regex(/^\+?[\d ]{8,16}$/), quantity: z.number().int().min(1).max(6),
+  zoneId: z.string().trim().min(1).max(80), format: z.enum(["e-ticket", "physical"]),
 });
 
 const createGateAccessSchema = z.object({ action: z.literal("createGateAccess"), eventId: eventIdSchema, gateId: z.string().trim().min(1).max(80), label: z.string().trim().min(2).max(80) });
@@ -87,7 +93,7 @@ const createEventSchema = z.object({
   gateCount: z.number().int().min(1).max(20),
 }).refine((value) => value.endDate >= value.startDate, { message: "End date cannot be before start date", path: ["endDate"] });
 
-const actionSchema = z.union([scanSchema, lookupSchema, regenerateSchema, importSchema, createGateAccessSchema, revokeGateAccessSchema, revokeAllGateAccessSchema, createEventSchema, updateTicketThemeSchema, updateEventSchema, setEventStatusSchema, createZoneSchema, updateZoneSchema, deleteZoneSchema, createGateSchema, updateGateSchema, deleteGateSchema, duplicateEventSchema, updateTicketPolicySchema, deleteEventSchema, restoreEventSchema]);
+const actionSchema = z.union([scanSchema, lookupSchema, regenerateSchema, importSchema, createTicketSchema, createGateAccessSchema, revokeGateAccessSchema, revokeAllGateAccessSchema, createEventSchema, updateTicketThemeSchema, updateEventSchema, setEventStatusSchema, createZoneSchema, updateZoneSchema, deleteZoneSchema, createGateSchema, updateGateSchema, deleteGateSchema, duplicateEventSchema, updateTicketPolicySchema, deleteEventSchema, restoreEventSchema]);
 
 function json(data: unknown, init?: ResponseInit) {
   const response = Response.json(data, init);
@@ -122,6 +128,8 @@ export async function POST(request: Request) {
         return json({ result: await regenerateTicket(body.ticketId, body.expectedVersion, operator) });
       case "import":
         return json(await importTickets(body.rows, body.eventId, operator));
+      case "createTicket":
+        return json(await createTicket(body, body.eventId, operator), { status: 201 });
       case "createGateAccess":
         return json({ access: await createGateAccessLink(body.gateId, body.eventId, body.label, operator) });
       case "revokeGateAccess":

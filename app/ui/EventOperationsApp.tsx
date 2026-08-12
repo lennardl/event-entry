@@ -287,6 +287,8 @@ function ErrorScreen({ message, retry }: { message: string; retry: () => Promise
 }
 
 function Overview({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshOverview() { if (refreshing) return; setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }
   const pct = state.event.capacity ? Math.round((state.metrics.admitted / state.event.capacity) * 1000) / 10 : 0;
   const zoneStats = useMemo(() => {
     const totals = new Map<string, { allocated: number; admitted: number }>();
@@ -300,7 +302,7 @@ function Overview({ state, refresh }: { state: AppState; refresh: () => Promise<
   }, [state.tickets, state.zones]);
   return (
     <section>
-      <PageHeading eyebrow="Command centre" title="Entry operations at a glance" subtitle="Live attendance, gate throughput and issues requiring attention." action={<button className="secondary-button" onClick={() => void refresh()}>↻ Refresh</button>} />
+      <PageHeading eyebrow="Command centre" title="Entry operations at a glance" subtitle="Live attendance, gate throughput and issues requiring attention." action={<button className="secondary-button refresh-button" onClick={() => void refreshOverview()} disabled={refreshing}><span aria-hidden="true" className={refreshing ? "refresh-icon spinning" : "refresh-icon"}>↻</span>{refreshing ? "Refreshing…" : "Refresh"}</button>} />
       <div className="metrics-grid">
         <MetricCard label="Checked in" value={compactNumber(state.metrics.admitted)} detail={`${pct}% of venue capacity`} accent="red" />
         <MetricCard label="Admissions issued" value={compactNumber(state.metrics.allocated)} detail={`${compactNumber(state.metrics.remaining)} still available`} />
@@ -354,10 +356,11 @@ function Tickets({ state, refresh, onSelect, role }: { state: AppState; refresh:
   const [query, setQuery] = useState("");
   const [format, setFormat] = useState("all");
   const [importOpen, setImportOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const filtered = state.tickets.filter((ticket) => (format === "all" || ticket.format === format) && `${ticket.id} ${ticket.maskedNric} ${ticket.mobile}`.toLowerCase().includes(query.toLowerCase()));
   return (
     <section>
-      <PageHeading eyebrow="Ticket operations" title="Issued tickets" subtitle="Electronic bundles and individual physical tickets share one entry ledger." action={role === "Gate Supervisor" ? undefined : <button className="primary-button" onClick={() => setImportOpen(true)}>＋ Upload winners</button>} />
+      <PageHeading eyebrow="Ticket operations" title="Issued tickets" subtitle="Electronic bundles and individual physical tickets share one entry ledger." action={role === "Gate Supervisor" ? undefined : <div className="heading-actions"><button className="secondary-button" onClick={() => setCreateOpen(true)}>＋ Create ticket</button><button className="primary-button" onClick={() => setImportOpen(true)}>Upload winners</button></div>} />
       <div className="toolbar panel">
         <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ticket, NRIC or mobile" /></label>
         <select value={format} onChange={(event) => setFormat(event.target.value)}><option value="all">All formats</option><option value="e-ticket">E-tickets</option><option value="physical">Physical</option></select>
@@ -378,8 +381,23 @@ function Tickets({ state, refresh, onSelect, role }: { state: AppState; refresh:
         ))}
       </article>
       {importOpen ? <ImportDialog state={state} onClose={() => setImportOpen(false)} onComplete={async () => { setImportOpen(false); await refresh(); }} /> : null}
+      {createOpen ? <CreateTicketDialog state={state} onClose={() => setCreateOpen(false)} onComplete={async () => { setCreateOpen(false); await refresh(); }} /> : null}
     </section>
   );
+}
+
+function CreateTicketDialog({ state, onClose, onComplete }: { state: AppState; onClose: () => void; onComplete: () => Promise<void> }) {
+  const [format, setFormat] = useState<"e-ticket" | "physical">("e-ticket");
+  const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(null); const form = new FormData(event.currentTarget);
+    try {
+      const result = await requestAction({ action: "createTicket", eventId: state.event.id, nric: form.get("nric"), mobile: form.get("mobile"), zoneId: form.get("zoneId"), format, quantity: format === "physical" ? 1 : Number(form.get("quantity")) });
+      if (!result.created) throw new Error("The ticket conflicts with event policy or available capacity.");
+      await onComplete();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Ticket could not be created"); setBusy(false); }
+  }
+  return <div className="modal-backdrop"><form className="modal event-form" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="create-ticket-title"><button type="button" className="drawer-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">Single issuance</span><h2 id="create-ticket-title">Create a ticket</h2><p>Create one recipient allocation in the active event ledger.</p><div className="form-grid"><label><span>Recipient NRIC</span><input name="nric" required pattern="[STFGMstfgm][0-9]{7}[A-Za-z]" placeholder="S1234567D" autoComplete="off" /></label><label><span>Mobile number</span><input name="mobile" required inputMode="tel" minLength={8} maxLength={16} placeholder="9123 4567" /></label><label><span>Zone</span><select name="zoneId" required>{state.zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label><label><span>Format</span><select value={format} onChange={(changeEvent) => setFormat(changeEvent.target.value as "e-ticket" | "physical")}><option value="e-ticket">E-ticket</option><option value="physical">Physical</option></select></label><label><span>Admissions</span><input name="quantity" type="number" min={1} max={state.event.ticketPolicy.maxGroupSize} defaultValue={1} disabled={format === "physical"} required /></label></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? "Creating…" : "Create ticket"}</button></div></form></div>;
 }
 
 function Scanner({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {

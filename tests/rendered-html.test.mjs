@@ -250,3 +250,17 @@ test("event setup batch two scopes device access, duplication, branding, and tic
   assert.match(uiSource, /function DuplicateEventDialog/);
   assert.match(uiSource, /Revoke all active/);
 });
+
+test("operations controls refresh visibly, create single tickets, and preserve select spacing", async () => {
+  const [uiSource, actionSource, storeSource, styles] = await Promise.all([
+    readFile("app/ui/EventOperationsApp.tsx", "utf8"), readFile("app/api/actions/route.ts", "utf8"),
+    readFile("lib/store.ts", "utf8"), readFile("app/ui/operations.css", "utf8"),
+  ]);
+  assert.match(uiSource, /refreshOverview/);
+  assert.match(uiSource, /refresh-icon spinning/);
+  assert.match(uiSource, /CreateTicketDialog/);
+  assert.match(actionSource, /action: z\.literal\("createTicket"\)/);
+  assert.match(storeSource, /export async function createTicket/);
+  assert.match(styles, /background-position:right 13px center/);
+  assert.match(styles, /event-list>\.modal-actions/);
+});
