@@ -18,6 +18,9 @@
 .sidebar-foot strong { font-size: 12px; }
 .sidebar-foot span:not(.status-dot) { font-size: 10px; color: #aeb8cf; }
 .status-dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #25c58c; box-shadow: 0 0 0 4px rgba(37,197,140,.12); }
+.health-checking .status-dot { background: #8d99ad; box-shadow: 0 0 0 4px rgba(141,153,173,.14); }
+.health-degraded .status-dot { background: #f0a33a; box-shadow: 0 0 0 4px rgba(240,163,58,.14); }
+.health-unavailable .status-dot,.health-offline .status-dot { background: #fa5a70; box-shadow: 0 0 0 4px rgba(250,90,112,.14); }
 .main-area { grid-column: 2; min-width: 0; }
 .topbar { position: sticky; top: 0; z-index: 20; min-height: 76px; padding: 12px 32px; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(255,255,255,.94); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
 .event-switcher { display: grid; gap: 2px; }

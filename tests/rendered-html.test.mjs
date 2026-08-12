@@ -131,8 +131,21 @@ test("standard Next.js build contains the Vercel application routes", async () =
   assert.ok(manifest["/login/page"]);
   assert.equal(manifest["/login/verify/page"], undefined);
   assert.ok(manifest["/api/actions/route"]);
+  assert.ok(manifest["/api/health/route"]);
   assert.ok(manifest["/api/session/route"]);
   assert.ok(manifest["/api/state/route"]);
+});
+
+test("sidebar database status is backed by an authenticated five-minute health check", async () => {
+  const [uiSource, healthSource] = await Promise.all([
+    readFile("app/ui/EventOperationsApp.tsx", "utf8"), readFile("app/api/health/route.ts", "utf8"),
+  ]);
+  assert.doesNotMatch(uiSource, /Systems operational|Last checked just now/);
+  assert.match(uiSource, /HEALTH_CHECK_INTERVAL_MS = 5 \* 60 \* 1000/);
+  assert.match(uiSource, /visibilitychange/);
+  assert.match(healthSource, /authenticatedRole/);
+  assert.match(healthSource, /SELECT now\(\) AS checked_at/);
+  assert.match(healthSource, /DATABASE_TIMEOUT_MS = 5_000/);
 });
 
 test("service worker cannot cache operational or ticket APIs", async () => {

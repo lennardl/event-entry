@@ -11,6 +11,7 @@ import "./a11y.css";
 type View = "overview" | "tickets" | "scanner" | "exceptions" | "events";
 type ScanResult = { ok: boolean; reason?: string; ticketId?: string; zoneName?: string; quantity?: number; remaining?: number };
 type PendingScan = { id: string; token: string; quantity: number; gateId: string; createdAt: string };
+type DatabaseHealth = { status: "checking" | "connected" | "degraded" | "unavailable" | "offline"; checkedAt: string | null; latencyMs: number | null; lastHealthyAt: string | null };
 
 const OFFLINE_PACK_KEY = "event-entry-offline-pack:v1";
 const PENDING_SCANS_KEY = "event-entry-pending-scans:v1";
@@ -20,6 +21,7 @@ const numberFormatter = new Intl.NumberFormat("en-SG");
 const auditDateFormatter = new Intl.DateTimeFormat("en-SG", { day: "2-digit", month: "short", year: "numeric" });
 const auditTimeFormatter = new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", hour12: true });
 const EVENT_TIME_ZONES = ["Asia/Singapore", "Asia/Kuala_Lumpur", "Asia/Tokyo", "Australia/Sydney", "Europe/London", "America/New_York"];
+const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 function useUnsavedChanges(dirty: boolean) {
   useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
   return useCallback((close: () => void) => { if (!dirty) close(); else window.dispatchEvent(new CustomEvent("event-entry:confirm-discard", { detail: close })); }, [dirty]);
@@ -64,6 +66,52 @@ function formatTime(value: string) {
 
 function compactNumber(value: number) {
   return numberFormatter.format(value);
+}
+
+function DatabaseStatus() {
+  const [health, setHealth] = useState<DatabaseHealth>({ status: "checking", checkedAt: null, latencyMs: null, lastHealthyAt: null });
+
+  useEffect(() => {
+    let active = true;
+    async function check() {
+      if (!navigator.onLine) {
+        if (active) setHealth((current) => ({ ...current, status: "offline", checkedAt: new Date().toISOString(), latencyMs: null }));
+        return;
+      }
+      try {
+        const response = await fetch("/api/health", { cache: "no-store" });
+        const data = await response.json() as { status?: DatabaseHealth["status"]; checkedAt?: string; latencyMs?: number | null };
+        if (!active) return;
+        const healthy = response.ok && (data.status === "connected" || data.status === "degraded");
+        setHealth((current) => ({
+          status: healthy ? data.status as "connected" | "degraded" : "unavailable",
+          checkedAt: data.checkedAt ?? new Date().toISOString(),
+          latencyMs: healthy && typeof data.latencyMs === "number" ? data.latencyMs : null,
+          lastHealthyAt: healthy ? data.checkedAt ?? new Date().toISOString() : current.lastHealthyAt,
+        }));
+      } catch {
+        if (active) setHealth((current) => ({ ...current, status: navigator.onLine ? "unavailable" : "offline", checkedAt: new Date().toISOString(), latencyMs: null }));
+      }
+    }
+    void check();
+    const interval = window.setInterval(() => void check(), HEALTH_CHECK_INTERVAL_MS);
+    const onOnline = () => void check();
+    const onVisibility = () => { if (document.visibilityState === "visible") void check(); };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOnline);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { active = false; window.clearInterval(interval); window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOnline); document.removeEventListener("visibilitychange", onVisibility); };
+  }, []);
+
+  const label = health.status === "connected" ? "Database connected" : health.status === "degraded" ? "Database responding slowly" : health.status === "offline" ? "Browser offline" : health.status === "unavailable" ? "Database unavailable" : "Checking database";
+  const checked = health.checkedAt ? new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(health.checkedAt)) : null;
+  const detail = health.status === "connected" || health.status === "degraded"
+    ? `Checked ${checked}${health.latencyMs ? ` · ${health.latencyMs} ms` : ""}`
+    : health.lastHealthyAt ? `Last healthy ${new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit" }).format(new Date(health.lastHealthyAt))}` : checked ? `Check failed ${checked}` : "Running connectivity check";
+  return <div className={`sidebar-foot health-${health.status}`} role="status" aria-live="polite">
+    <span className="status-dot" aria-hidden="true" />
+    <div><strong>{label}</strong><span>{detail}</span></div>
+  </div>;
 }
 
 function auditLabel(action: string) {
@@ -195,10 +243,7 @@ export function EventOperationsApp({ initialState = null, initialError = null }:
             );
           })}
         </nav>
-        <div className="sidebar-foot">
-          <span className="status-dot" />
-          <div><strong>Systems operational</strong><span>Last checked just now</span></div>
-        </div>
+        <DatabaseStatus />
       </aside>
 
       <main className="main-area">
