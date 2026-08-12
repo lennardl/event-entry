@@ -14,7 +14,7 @@ export default function LoginPage() {
         <div className={styles.mark}>SG</div>
         <span className={styles.eyebrow}>Operations access</span>
         <h1>Event Entry</h1>
-        <p>Enter the deployment access key to open the operations console.</p>
+        <p>Use your government email to receive a secure, one-time sign-in link.</p>
         <LoginForm />
       </section>
     </main>

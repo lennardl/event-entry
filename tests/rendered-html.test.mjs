@@ -4,6 +4,8 @@ import test from "node:test";
 
 process.env.APP_ACCESS_KEY = "test-access-key-with-sufficient-entropy";
 const auth = await import("../lib/auth.ts");
+const email = await import("../lib/email.ts");
+const authEmail = await import("../lib/auth-email.ts");
 
 test("creates and verifies a signed operations session", () => {
   const token = auth.sessionToken();
@@ -16,6 +18,30 @@ test("creates and verifies a signed operations session", () => {
   assert.equal(auth.isAuthenticatedRequest(request), true);
   assert.equal(auth.verifyAccessKey("test-access-key-with-sufficient-entropy"), "Super Admin");
   assert.equal(auth.verifyAccessKey("wrong-key"), null);
+});
+
+test("passwordless sessions preserve roles and government domain matching is boundary-safe", () => {
+  const token = auth.sessionToken("Admin", "person@agency.gov.sg");
+  const request = new Request("https://event-entry.example/", { headers: { cookie: `${auth.SESSION_COOKIE}=${token}` } });
+  assert.equal(auth.authenticatedRole(request), "Admin");
+  assert.equal(authEmail.isAllowedGovernmentEmail(" Person@Open.Gov.Sg "), true);
+  assert.equal(authEmail.isAllowedGovernmentEmail("person@gov.sg.attacker.example"), false);
+  assert.equal(authEmail.isAllowedGovernmentEmail("person@notgov.sg"), false);
+});
+
+test("Postman adapter sends the documented v1 JSON contract without exposing its key", async () => {
+  process.env.POSTMAN_EMAIL_API_KEY = "postman-test-secret";
+  let request;
+  const provider = email.createPostmanEmailProvider(async (url, options) => {
+    request = { url, options };
+    return Response.json({ id: "email-123" }, { status: 201 });
+  });
+  assert.deepEqual(await provider.send({ to: "person@agency.gov.sg", subject: "Sign in", text: "Link", html: "<p>Link</p>" }), { messageId: "email-123" });
+  assert.equal(request.url, "https://api.postman.gov.sg/v1/transactional/email/send");
+  assert.equal(request.options.headers.authorization, "Bearer postman-test-secret");
+  assert.deepEqual(JSON.parse(request.options.body), {
+    recipient: "person@agency.gov.sg", subject: "Sign in", body: "<p>Link</p>", classification: "FOR_ACTION", tag: "operations-login",
+  });
 });
 
 test("event setup batches three and four enforce operational safety", async () => {
@@ -32,6 +58,9 @@ test("event setup batches three and four enforce operational safety", async () =
   assert.doesNotMatch(uiSource, /Demo role/);
   assert.match(uiSource, /Search events/);
   assert.match(uiSource, /Audit history/);
+  assert.match(uiSource, /audit-list/);
+  assert.match(uiSource, /Ticket scanner/);
+  assert.doesNotMatch(uiSource, /Gate scanner/);
   assert.match(uiSource, /Move to Recently deleted/);
   assert.match(safetyMigration, /deleted_at/);
 });
@@ -85,6 +114,7 @@ test("standard Next.js build contains the Vercel application routes", async () =
   const manifest = JSON.parse(await readFile(".next/server/app-paths-manifest.json", "utf8"));
   assert.ok(manifest["/page"]);
   assert.ok(manifest["/login/page"]);
+  assert.ok(manifest["/login/verify/page"]);
   assert.ok(manifest["/api/actions/route"]);
   assert.ok(manifest["/api/session/route"]);
   assert.ok(manifest["/api/state/route"]);

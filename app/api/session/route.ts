@@ -1,64 +1,72 @@
 import { NextResponse } from "next/server";
-import { isAccessControlConfigured, isSameOriginRequest, SESSION_COOKIE, sessionToken, verifyAccessKey } from "../../../lib/auth";
+import { isSameOriginRequest, SESSION_COOKIE, sessionToken } from "../../../lib/auth";
+import { createPostmanEmailProvider, escapeHtml } from "../../../lib/email";
+import { isAllowedGovernmentEmail, normaliseEmail } from "../../../lib/auth-email";
+import { attachProviderMessage, consumeMagicLink, createMagicLink, revokeMagicLink } from "../../../lib/magic-links";
 
-const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS = 8;
-const attempts = new Map<string, { count: number; resetAt: number }>();
+const MAX_BODY_BYTES = 4096;
+const GENERIC_MESSAGE = "If that address is eligible, a secure sign-in link is on its way.";
 
-function clientKey(request: Request) {
+function clientAddress(request: Request) {
   return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
 }
 
-function rateLimit(request: Request) {
-  const now = Date.now();
-  if (attempts.size > 1000) {
-    for (const [key, value] of attempts) if (value.resetAt <= now) attempts.delete(key);
-  }
-  const key = clientKey(request);
-  const current = attempts.get(key);
-  if (!current || current.resetAt <= now) {
-    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
-    return null;
-  }
-  current.count += 1;
-  return current.count > MAX_ATTEMPTS ? Math.ceil((current.resetAt - now) / 1000) : null;
+async function jsonBody(request: Request) {
+  if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) return null;
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) return null;
+  try { return JSON.parse(raw) as { email?: unknown; token?: unknown }; } catch { return null; }
+}
+
+function applicationOrigin(request: Request) {
+  const configured = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
+  const url = new URL(configured ?? request.url);
+  if (process.env.NODE_ENV === "production" && url.protocol !== "https:") throw new Error("APP_URL must use HTTPS in production");
+  return url.origin;
 }
 
 export async function POST(request: Request) {
-  if (!isAccessControlConfigured()) {
-    return NextResponse.json({ error: "APP_ACCESS_KEY is not configured" }, { status: 503 });
+  if (!isSameOriginRequest(request)) return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+  const body = await jsonBody(request);
+  if (!body) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+
+  if (typeof body.token === "string") {
+    const identity = await consumeMagicLink(body.token);
+    if (!identity) return NextResponse.json({ error: "This sign-in link is invalid or has expired." }, { status: 401 });
+    const response = NextResponse.json({ ok: true, role: identity.role });
+    response.cookies.set(SESSION_COOKIE, sessionToken(identity.role, identity.email)!, {
+      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "strict", path: "/", maxAge: 8 * 60 * 60, priority: "high",
+    });
+    return response;
   }
-  if (!isSameOriginRequest(request)) {
-    return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+
+  const email = typeof body.email === "string" ? normaliseEmail(body.email) : "";
+  if (!isAllowedGovernmentEmail(email)) return NextResponse.json({ ok: true, message: GENERIC_MESSAGE });
+
+  let link: Awaited<ReturnType<typeof createMagicLink>> = null;
+  try {
+    link = await createMagicLink(email, clientAddress(request));
+    if (!link) return NextResponse.json({ ok: true, message: GENERIC_MESSAGE });
+    const verifyUrl = new URL("/login/verify", applicationOrigin(request));
+    verifyUrl.searchParams.set("token", link.token);
+    const safeUrl = escapeHtml(verifyUrl.toString());
+    const result = await createPostmanEmailProvider().send({
+      to: email,
+      subject: "Sign in to Event Entry",
+      text: `Use this secure link to sign in: ${verifyUrl.toString()}\n\nIt expires in ${link.expiresInMinutes} minutes and can only be used once.`,
+      html: `<p>Use the secure link below to sign in to Event Entry.</p><p><a href="${safeUrl}">Continue to Event Entry</a></p><p>This link expires in ${link.expiresInMinutes} minutes and can only be used once.</p>`,
+    });
+    await attachProviderMessage(link.id, result.messageId);
+    return NextResponse.json({ ok: true, message: GENERIC_MESSAGE });
+  } catch (error) {
+    if (link) await revokeMagicLink(link.id).catch(() => undefined);
+    console.error("Unable to send sign-in email", error instanceof Error ? error.message : "Unknown error");
+    return NextResponse.json({ error: "Sign-in email is temporarily unavailable. Please try again shortly." }, { status: 503 });
   }
-  const retryAfter = rateLimit(request);
-  if (retryAfter) return NextResponse.json({ error: "Too many sign-in attempts" }, { status: 429, headers: { "retry-after": String(retryAfter) } });
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > 4096) return NextResponse.json({ error: "Request is too large" }, { status: 413 });
-  const rawBody = await request.text();
-  if (new TextEncoder().encode(rawBody).byteLength > 4096) return NextResponse.json({ error: "Request is too large" }, { status: 413 });
-  let body: { accessKey?: unknown } | null = null;
-  try { body = JSON.parse(rawBody) as { accessKey?: unknown }; } catch { body = null; }
-  const role = verifyAccessKey(typeof body?.accessKey === "string" ? body.accessKey : "");
-  if (!role) {
-    return NextResponse.json({ error: "Invalid access key" }, { status: 401 });
-  }
-  attempts.delete(clientKey(request));
-  const response = NextResponse.json({ ok: true, role });
-  response.cookies.set(SESSION_COOKIE, sessionToken(role)!, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 8 * 60 * 60,
-  });
-  return response;
 }
 
 export async function DELETE(request: Request) {
-  if (!isSameOriginRequest(request)) {
-    return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
-  }
+  if (!isSameOriginRequest(request)) return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
   const response = NextResponse.json({ ok: true });
   response.cookies.set(SESSION_COOKIE, "", { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "strict", path: "/", maxAge: 0 });
   return response;

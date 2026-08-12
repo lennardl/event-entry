@@ -17,6 +17,8 @@ const PENDING_SCANS_KEY = "event-entry-pending-scans:v1";
 const OFFLINE_PACK_LIFETIME_MS = 4 * 60 * 60 * 1000;
 const timeFormatter = new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 const numberFormatter = new Intl.NumberFormat("en-SG");
+const auditDateFormatter = new Intl.DateTimeFormat("en-SG", { day: "2-digit", month: "short", year: "numeric" });
+const auditTimeFormatter = new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", hour12: true });
 const EVENT_TIME_ZONES = ["Asia/Singapore", "Asia/Kuala_Lumpur", "Asia/Tokyo", "Australia/Sydney", "Europe/London", "America/New_York"];
 function useUnsavedChanges(dirty: boolean) {
   useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
@@ -51,7 +53,7 @@ const viewAccess: Record<View, Role[]> = {
 const navItems: Array<{ id: View; label: string; marker: string }> = [
   { id: "overview", label: "Command overview", marker: "◎" },
   { id: "tickets", label: "Tickets", marker: "▤" },
-  { id: "scanner", label: "Gate scanner", marker: "⌗" },
+  { id: "scanner", label: "Ticket scanner", marker: "⌗" },
   { id: "exceptions", label: "Exceptions", marker: "!" },
   { id: "events", label: "Event setup", marker: "◇" },
 ];
@@ -62,6 +64,26 @@ function formatTime(value: string) {
 
 function compactNumber(value: number) {
   return numberFormatter.format(value);
+}
+
+function auditLabel(action: string) {
+  return action.replaceAll("_", " ").replaceAll(".", " ").replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+function AuditHistory({ events }: { events: AppState["auditEvents"] }) {
+  const recent = events.slice(0, 10);
+  return <article className="panel audit-panel">
+    <header className="audit-header"><div><span className="eyebrow">Audit history</span><h2>Recent event changes</h2><p>A trace of configuration and ticket activity for this event.</p></div><span className="audit-count">{recent.length} recent</span></header>
+    {recent.length ? <ol className="audit-list">{recent.map((audit) => {
+      const createdAt = new Date(audit.createdAt);
+      const category = audit.action.split(".")[0];
+      return <li key={audit.id} className={`audit-item audit-${category}`}>
+        <span className="audit-marker" aria-hidden="true" />
+        <div className="audit-copy"><strong>{auditLabel(audit.action)}</strong><span>{audit.detail}</span><small>By {audit.actor}</small></div>
+        <time dateTime={audit.createdAt}><strong>{auditDateFormatter.format(createdAt)}</strong><span>{auditTimeFormatter.format(createdAt)}</span></time>
+      </li>;
+    })}</ol> : <div className="audit-empty"><strong>No changes recorded</strong><span>New event activity will appear here.</span></div>}
+  </article>;
 }
 
 async function requestAction(body: Record<string, unknown>) {
@@ -534,7 +556,7 @@ function EventSetup({ state, onEventCreated }: { state: AppState; onEventCreated
       <SetupCard eyebrow="Reuse configuration" title="Duplicate event" detail="Copy details, zones, gates, ticket design and policy without recipients or scans." metric="Creates a draft" action="Duplicate event" onAction={() => setDuplicateOpen(true)} />
       <article className="panel setup-card readiness-card"><span className="eyebrow">Readiness · {state.readiness.progress}%</span><h2>{state.readiness.ready ? "Ready for gates" : "Needs attention"}</h2><progress max={100} value={state.readiness.progress} aria-label="Setup completion" /><p><strong>Next:</strong> {state.readiness.nextAction}</p><div className="readiness-list">{state.readiness.checks.map((check) => <div key={check.id} className={check.level}><span>{check.ok ? "✓" : check.level === "blocker" ? "!" : "·"}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div></div>)}</div><button className="secondary-button" onClick={() => router.push(`/?view=overview&event=${encodeURIComponent(state.event.id)}`)}>Open command overview</button></article>
     </div>
-    <article className="panel audit-panel"><div className="panel-title"><div><span className="eyebrow">Audit history</span><h2>Recent event changes</h2></div></div><div className="readiness-list">{state.auditEvents.slice(0, 10).map((audit) => <div key={audit.id}><span>·</span><div><strong>{audit.action.replaceAll(".", " ")}</strong><small>{audit.actor} · {new Date(audit.createdAt).toLocaleString("en-SG")} · {audit.detail}</small></div></div>)}</div></article>
+    <AuditHistory events={state.auditEvents} />
     {createOpen ? <CreateEventDialog onClose={() => setCreateOpen(false)} onCreated={async (eventId) => { setCreateOpen(false); await onEventCreated(eventId); }} /> : null}
     {themeOpen ? <TicketThemeDialog event={state.event} onClose={() => setThemeOpen(false)} onSaved={async () => { setThemeOpen(false); await refresh(); }} /> : null}
     {policyOpen ? <TicketPolicyDialog event={state.event} onClose={() => setPolicyOpen(false)} onSaved={async () => { setPolicyOpen(false); await refresh(); }} /> : null}

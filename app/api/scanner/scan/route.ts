@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     if (!body.success) return json({ error: "Invalid scanner request" }, { status: 400 });
     const access = await getGateAccess(accessToken);
     if (!access) return json({ error: "Scanner access has expired or was revoked" }, { status: 401 });
-    const result = await consumeTicket({ token: body.data.token, quantity: body.data.quantity, gateId: access.gateId, mode: "online", requestId: body.data.requestId, operator: `Gate scanner (${access.gateName})` });
+    const result = await consumeTicket({ token: body.data.token, quantity: body.data.quantity, gateId: access.gateId, mode: "online", requestId: body.data.requestId, operator: `Ticket scanner (${access.gateName})` });
     await markGateAccessUsed(access.id).catch((error) => console.error("Could not update scanner last-used time", error));
     return json(result);
   } catch (error) {
