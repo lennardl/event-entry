@@ -14,7 +14,7 @@ export default function LoginPage() {
         <div className={styles.mark}>SG</div>
         <span className={styles.eyebrow}>Operations access</span>
         <h1>Event Entry</h1>
-        <p>Use your government email to receive a secure, one-time sign-in link.</p>
+        <p>Use your government email to receive a secure, one-time sign-in code.</p>
         <LoginForm />
       </section>
     </main>

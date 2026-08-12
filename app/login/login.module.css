@@ -95,6 +95,7 @@
   font-size: 14px;
 }
 
-.success { display: grid; gap: 10px; padding: 16px; border-radius: 14px; background: #edf8f2; color: #17603a; }
-.success span { font-size: .92rem; }
-.success button { justify-self: start; border: 0; padding: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
+.codeIntro { display: grid; gap: 5px; margin-bottom: 8px; padding: 14px; border-radius: 12px; background: #edf8f2; color: #17603a; }
+.codeIntro span { font-size: 13px; line-height: 1.5; }
+.form .codeInput { height: 58px; text-align: center; font-size: 25px; font-weight: 750; letter-spacing: .28em; font-variant-numeric: tabular-nums; }
+.form .textButton { height: auto; margin-top: 2px; padding: 8px; color: #475467; background: transparent; font-size: 13px; text-decoration: underline; }

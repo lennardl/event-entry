@@ -44,6 +44,21 @@ test("Postman adapter sends the documented v1 JSON contract without exposing its
   });
 });
 
+test("email authentication uses an eight-digit, attempt-limited one-time code", async () => {
+  const [codeSource, routeSource, formSource] = await Promise.all([
+    readFile("lib/login-codes.ts", "utf8"), readFile("app/api/session/route.ts", "utf8"), readFile("app/login/LoginForm.tsx", "utf8"),
+  ]);
+  assert.match(codeSource, /randomInt\(0, 100_000_000\)/);
+  assert.match(codeSource, /MAX_CODE_ATTEMPTS = 5/);
+  assert.match(codeSource, /createHmac\("sha256"/);
+  assert.match(codeSource, /consumed_at = CASE/);
+  assert.match(codeSource, /DROP INDEX IF EXISTS auth_magic_links_token_hash_idx/);
+  assert.match(routeSource, /consumeLoginCode\(email, body\.code\)/);
+  assert.doesNotMatch(routeSource, /verifyUrl|searchParams\.set/);
+  assert.match(formSource, /autoComplete="one-time-code"/);
+  assert.match(formSource, /pattern="\[0-9\]\{8\}"/);
+});
+
 test("event setup batches three and four enforce operational safety", async () => {
   const [storeSource, actionSource, authSource, uiSource, scheduleMigration, safetyMigration] = await Promise.all([
     readFile("lib/store.ts", "utf8"), readFile("app/api/actions/route.ts", "utf8"), readFile("lib/auth.ts", "utf8"),
@@ -114,7 +129,7 @@ test("standard Next.js build contains the Vercel application routes", async () =
   const manifest = JSON.parse(await readFile(".next/server/app-paths-manifest.json", "utf8"));
   assert.ok(manifest["/page"]);
   assert.ok(manifest["/login/page"]);
-  assert.ok(manifest["/login/verify/page"]);
+  assert.equal(manifest["/login/verify/page"], undefined);
   assert.ok(manifest["/api/actions/route"]);
   assert.ok(manifest["/api/session/route"]);
   assert.ok(manifest["/api/state/route"]);
