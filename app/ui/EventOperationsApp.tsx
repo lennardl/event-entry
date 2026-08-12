@@ -20,7 +20,23 @@ const numberFormatter = new Intl.NumberFormat("en-SG");
 const EVENT_TIME_ZONES = ["Asia/Singapore", "Asia/Kuala_Lumpur", "Asia/Tokyo", "Australia/Sydney", "Europe/London", "America/New_York"];
 function useUnsavedChanges(dirty: boolean) {
   useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
-  return useCallback((close: () => void) => { if (!dirty || window.confirm("Discard your unsaved changes?")) close(); }, [dirty]);
+  return useCallback((close: () => void) => { if (!dirty) close(); else window.dispatchEvent(new CustomEvent("event-entry:confirm-discard", { detail: close })); }, [dirty]);
+}
+
+function UnsavedChangesDialog({ open, onDiscard, onKeep }: { open: boolean; onDiscard: () => void; onKeep: () => void }) {
+  if (!open) return null;
+  return <div className="modal-backdrop confirmation-backdrop"><div className="modal confirmation-modal" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-title" aria-describedby="unsaved-detail"><span className="eyebrow">Unsaved changes</span><h2 id="unsaved-title">Discard your changes?</h2><p id="unsaved-detail">Your edits have not been saved. You can keep working or discard them and close.</p><div className="modal-actions"><button className="secondary-button" onClick={onKeep}>Keep editing</button><button className="danger-button" onClick={onDiscard}>Discard changes</button></div></div></div>;
+}
+
+function useModalAccessibility() {
+  useEffect(() => {
+    let previous: HTMLElement | null = null;
+    const focusNewest = () => { const modals = document.querySelectorAll<HTMLElement>(".modal"); const modal = modals.item(modals.length - 1); if (!modal) return; if (!modal.hasAttribute("role")) modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true"); if (modal.contains(document.activeElement)) return; previous = document.activeElement as HTMLElement | null; modal.querySelector<HTMLElement>("button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[href]")?.focus(); };
+    const observer = new MutationObserver(focusNewest); observer.observe(document.body, { childList: true, subtree: true });
+    const onKeyDown = (event: KeyboardEvent) => { const modals = document.querySelectorAll<HTMLElement>(".modal"); const modal = modals.item(modals.length - 1); if (!modal) return; if (event.key === "Escape") { modal.querySelector<HTMLButtonElement>(".drawer-close")?.click(); return; } if (event.key !== "Tab") return; const items = [...modal.querySelectorAll<HTMLElement>("button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[href]")]; if (!items.length) return; const index = items.indexOf(document.activeElement as HTMLElement); if (event.shiftKey && index <= 0) { event.preventDefault(); items.at(-1)?.focus(); } else if (!event.shiftKey && index === items.length - 1) { event.preventDefault(); items[0]?.focus(); } };
+    document.addEventListener("keydown", onKeyDown); focusNewest();
+    return () => { observer.disconnect(); document.removeEventListener("keydown", onKeyDown); previous?.focus(); };
+  }, []);
 }
 
 const roles: Role[] = ["Super Admin", "Admin", "Gate Supervisor", "Command Centre Viewer"];
@@ -60,6 +76,7 @@ function registerServiceWorker() {
 }
 
 export function EventOperationsApp({ initialState = null, initialError = null }: { initialState?: AppState | null; initialError?: string | null }) {
+  useModalAccessibility();
   const router = useRouter();
   const [state, setState] = useState<AppState | null>(initialState);
   const [view, setView] = useState<View>("overview");
@@ -69,6 +86,7 @@ export function EventOperationsApp({ initialState = null, initialError = null }:
   const [error, setError] = useState<string | null>(initialError);
   const [selectedTicket, setSelectedTicket] = useState<TicketRecord | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
   const loadInFlight = useRef<Promise<void> | null>(null);
   const currentEventId = useRef(initialState?.event.id);
 
@@ -119,6 +137,7 @@ export function EventOperationsApp({ initialState = null, initialError = null }:
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [sidebarOpen]);
+  useEffect(() => { const requestDiscard = (event: Event) => setDiscardAction(() => (event as CustomEvent<() => void>).detail); window.addEventListener("event-entry:confirm-discard", requestDiscard); return () => window.removeEventListener("event-entry:confirm-discard", requestDiscard); }, []);
 
   function navigate(next: View) {
     if (!viewAccess[next].includes(role)) return;
@@ -187,12 +206,13 @@ export function EventOperationsApp({ initialState = null, initialError = null }:
         </div>
       </main>
       {selectedTicket ? <TicketDrawer ticket={selectedTicket} event={state.event} onClose={() => setSelectedTicket(null)} refresh={load} role={role} /> : null}
+      <UnsavedChangesDialog open={Boolean(discardAction)} onKeep={() => setDiscardAction(null)} onDiscard={() => { const action = discardAction; setDiscardAction(null); action?.(); }} />
     </div>
   );
 }
 
 function LoadingScreen() {
-  return <div className="loading-screen"><div className="pulse-logo">SG</div><strong>Preparing Event Entry</strong><span>Loading event operations…</span></div>;
+  return <div className="loading-shell" aria-label="Loading event operations" aria-busy="true"><aside><div className="skeleton" style={{ width: "62%", height: 48 }} /><div className="skeleton" style={{ marginTop: 42 }} /><div className="skeleton" /><div className="skeleton" /></aside><main><div className="skeleton" style={{ width: "28%" }} /><div className="skeleton hero" /><div><span className="skeleton card" /><span className="skeleton card" /><span className="skeleton card" /><span className="skeleton card" /></div><div className="skeleton" style={{ height: 280, marginTop: 20 }} /></main></div>;
 }
 
 function ErrorScreen({ message, retry }: { message: string; retry: () => Promise<void> }) {
@@ -566,7 +586,7 @@ function TicketThemeDialog({ event, onClose, onSaved }: { event: AppState["event
   const [theme, setTheme] = useState(event.ticketTheme);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useUnsavedChanges(JSON.stringify(theme) !== JSON.stringify(event.ticketTheme));
+  const guardedClose = useUnsavedChanges(JSON.stringify(theme) !== JSON.stringify(event.ticketTheme));
   const update = (field: keyof typeof theme, value: string) => setTheme((current) => ({ ...current, [field]: value }));
   async function loadLogo(file: File | undefined) { if (!file) return; if (!/image\/(png|jpeg|webp)/.test(file.type) || file.size > 250_000) { setError("Logo must be PNG, JPEG or WebP and no larger than 250 KB."); return; } const reader = new FileReader(); reader.onload = () => update("logoDataUrl", String(reader.result)); reader.readAsDataURL(file); }
   async function save() {
@@ -579,7 +599,7 @@ function TicketThemeDialog({ event, onClose, onSaved }: { event: AppState["event
       setBusy(false);
     }
   }
-  return <div className="modal-backdrop"><div className="modal ticket-theme-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-theme-title"><button className="drawer-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">Ticket design</span><h2 id="ticket-theme-title">Customise {event.name}</h2><div className="theme-editor"><div className="event-form form-grid"><label><span>Brand name</span><input value={theme.brandName} maxLength={50} onChange={(e) => update("brandName", e.target.value)} /></label><label><span>Ticket title</span><input value={theme.ticketTitle} maxLength={80} onChange={(e) => update("ticketTitle", e.target.value)} /></label><label><span>Primary colour</span><input type="color" value={theme.primaryColour} onChange={(e) => update("primaryColour", e.target.value)} /></label><label><span>Accent colour</span><input type="color" value={theme.accentColour} onChange={(e) => update("accentColour", e.target.value)} /></label><label className="full"><span>Logo (PNG, JPEG or WebP)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => void loadLogo(e.target.files?.[0])} /></label><label className="full"><span>Attendee instructions</span><textarea value={theme.instructions} maxLength={300} rows={3} onChange={(e) => update("instructions", e.target.value)} /></label><label className="full"><span>Support contact</span><input value={theme.supportContact} maxLength={120} onChange={(e) => update("supportContact", e.target.value)} placeholder="help@example.sg" /></label><label className="full"><span>Terms</span><textarea value={theme.terms} maxLength={500} rows={3} onChange={(e) => update("terms", e.target.value)} /></label></div><TicketThemePreview event={event} theme={theme} /></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button className="secondary-button" onClick={() => setTheme({ brandName: "Event Entry", ticketTitle: "Official admission ticket", instructions: "Present this QR at any entry gate. Turn your screen brightness up if needed.", primaryColour: "#17213a", accentColour: "#dc162f", logoDataUrl: "", supportContact: "", terms: "" })}>Reset defaults</button><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Saving design…" : "Save ticket design"}</button></div></div></div>;
+  return <div className="modal-backdrop"><div className="modal ticket-theme-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-theme-title"><button className="drawer-close" onClick={() => guardedClose(onClose)} aria-label="Close">×</button><span className="eyebrow">Ticket design</span><h2 id="ticket-theme-title">Customise {event.name}</h2><div className="theme-editor"><div className="event-form form-grid"><label><span>Brand name</span><input value={theme.brandName} maxLength={50} onChange={(e) => update("brandName", e.target.value)} /></label><label><span>Ticket title</span><input value={theme.ticketTitle} maxLength={80} onChange={(e) => update("ticketTitle", e.target.value)} /></label><label><span>Primary colour</span><input type="color" value={theme.primaryColour} onChange={(e) => update("primaryColour", e.target.value)} /></label><label><span>Accent colour</span><input type="color" value={theme.accentColour} onChange={(e) => update("accentColour", e.target.value)} /></label><label className="full"><span>Logo (PNG, JPEG or WebP)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => void loadLogo(e.target.files?.[0])} /></label><label className="full"><span>Attendee instructions</span><textarea value={theme.instructions} maxLength={300} rows={3} onChange={(e) => update("instructions", e.target.value)} /></label><label className="full"><span>Support contact</span><input value={theme.supportContact} maxLength={120} onChange={(e) => update("supportContact", e.target.value)} placeholder="help@example.sg" /></label><label className="full"><span>Terms</span><textarea value={theme.terms} maxLength={500} rows={3} onChange={(e) => update("terms", e.target.value)} /></label></div><TicketThemePreview event={event} theme={theme} /></div>{error ? <div className="inline-message error" role="alert">{error}</div> : null}<div className="modal-actions"><button className="secondary-button" onClick={() => setTheme({ brandName: "Event Entry", ticketTitle: "Official admission ticket", instructions: "Present this QR at any entry gate. Turn your screen brightness up if needed.", primaryColour: "#17213a", accentColour: "#dc162f", logoDataUrl: "", supportContact: "", terms: "" })}>Reset defaults</button><button className="secondary-button" onClick={() => guardedClose(onClose)} disabled={busy}>Cancel</button><button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Saving design…" : "Save ticket design"}</button></div></div></div>;
 }
 
 function TicketThemePreview({ event, theme }: { event: AppState["event"]; theme: AppState["event"]["ticketTheme"] }) {
@@ -652,7 +672,7 @@ function TicketDrawer({ ticket, event, onClose, refresh, role }: { ticket: Ticke
   }
   const link = typeof window === "undefined" ? "" : `${window.location.origin}/ticket/${encodeURIComponent(current.token)}`;
   const theme = event.ticketTheme;
-  return <div className="drawer-backdrop" role="button" tabIndex={0} aria-label="Close ticket details" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="ticket-drawer"><button className="drawer-close" onClick={onClose} aria-label="Close ticket">×</button><div className="citizen-ticket" style={{ "--ticket-zone": current.zoneColour, "--ticket-primary": theme.primaryColour, "--ticket-accent": theme.accentColour } as React.CSSProperties}><div className="ticket-brand">{theme.logoDataUrl ? <img className="ticket-logo" src={theme.logoDataUrl} alt={`${theme.brandName} logo`} /> : <div className="brand-mark small" style={{ background: theme.primaryColour }}><span>{theme.brandName.slice(0, 2).toUpperCase()}</span></div>}<div><strong>{theme.brandName}</strong><span>{theme.ticketTitle}</span></div></div><div className="ticket-theme-accent" /><div className="ticket-zone"><span>{current.zoneName}</span><strong>ZONE</strong></div><div className="ticket-event"><span>{event.name}</span><h2>{event.venue}</h2><div><span>Entry window</span><strong>{event.entryWindowStart}–{event.entryWindowEnd}</strong></div></div><div className="qr-wrap">{qr ? <img src={qr} alt={`QR code for ${current.id}`} /> : <span>Generating QR…</span>}</div><div className="ticket-count"><strong>{current.remainingEntries}</strong><span>of {current.maxEntries} admissions remaining</span></div><p className="ticket-instructions">{theme.instructions}</p><div className="ticket-id">{current.id} · Version {current.version}</div></div><div className="drawer-actions"><a className="wallet-button apple" href={`/api/wallet/apple?ticket=${current.id}`}><span></span><small>Add to</small><strong>Apple Wallet</strong></a><a className="wallet-button google" href={`/api/wallet/google?ticket=${current.id}`}><span>G</span><small>Save to</small><strong>Google Wallet</strong></a><button className="secondary-button full" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); }}>{copied ? "✓ Link copied" : "Copy ticket link"}</button>{event.ticketPolicy.allowRegeneration ? <button className="danger-button" onClick={() => void regenerate()}>Regenerate lost ticket</button> : null}<small className="drawer-help">Regenerating immediately invalidates the previous QR while preserving admissions already used.</small></div></aside></div>;
+  return <div className="drawer-backdrop"><aside className="ticket-drawer" role="dialog" aria-modal="true" aria-label="Ticket details"><button className="drawer-close" onClick={onClose} aria-label="Close ticket">×</button><div className="citizen-ticket" style={{ "--ticket-zone": current.zoneColour, "--ticket-primary": theme.primaryColour, "--ticket-accent": theme.accentColour } as React.CSSProperties}><div className="ticket-brand">{theme.logoDataUrl ? <img className="ticket-logo" src={theme.logoDataUrl} alt={`${theme.brandName} logo`} /> : <div className="brand-mark small" style={{ background: theme.primaryColour }}><span>{theme.brandName.slice(0, 2).toUpperCase()}</span></div>}<div><strong>{theme.brandName}</strong><span>{theme.ticketTitle}</span></div></div><div className="ticket-theme-accent" /><div className="ticket-zone"><span>{current.zoneName}</span><strong>ZONE</strong></div><div className="ticket-event"><span>{event.name}</span><h2>{event.venue}</h2><div><span>Entry window</span><strong>{event.entryWindowStart}–{event.entryWindowEnd}</strong></div></div><div className="qr-wrap">{qr ? <img src={qr} alt={`QR code for ${current.id}`} /> : <span>Generating QR…</span>}</div><div className="ticket-count"><strong>{current.remainingEntries}</strong><span>of {current.maxEntries} admissions remaining</span></div><p className="ticket-instructions">{theme.instructions}</p><div className="ticket-id">{current.id} · Version {current.version}</div></div><div className="drawer-actions"><a className="wallet-button apple" href={`/api/wallet/apple?ticket=${current.id}`}><span></span><small>Add to</small><strong>Apple Wallet</strong></a><a className="wallet-button google" href={`/api/wallet/google?ticket=${current.id}`}><span>G</span><small>Save to</small><strong>Google Wallet</strong></a><button className="secondary-button full" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); }}>{copied ? "✓ Link copied" : "Copy ticket link"}</button>{event.ticketPolicy.allowRegeneration ? <button className="danger-button" onClick={() => void regenerate()}>Regenerate lost ticket</button> : null}<small className="drawer-help">Regenerating immediately invalidates the previous QR while preserving admissions already used.</small></div></aside></div>;
 }
 
 function ImportDialog({ state, onClose, onComplete }: { state: AppState; onClose: () => void; onComplete: () => Promise<void> }) {

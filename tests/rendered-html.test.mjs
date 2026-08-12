@@ -36,6 +36,21 @@ test("event setup batches three and four enforce operational safety", async () =
   assert.match(safetyMigration, /deleted_at/);
 });
 
+test("design engineering polish preserves responsive and accessible interactions", async () => {
+  const [uiSource, globalStyles, a11yStyles] = await Promise.all([
+    readFile("app/ui/EventOperationsApp.tsx", "utf8"), readFile("app/globals.css", "utf8"), readFile("app/ui/a11y.css", "utf8"),
+  ]);
+  assert.doesNotMatch(uiSource, /window\.confirm/);
+  assert.match(uiSource, /UnsavedChangesDialog/);
+  assert.match(uiSource, /useModalAccessibility/);
+  assert.match(uiSource, /loading-shell/);
+  assert.match(globalStyles, /--ease-drawer/);
+  assert.match(globalStyles, /scale\(\.97\)/);
+  assert.match(a11yStyles, /@starting-style/);
+  assert.match(a11yStyles, /hover:hover/);
+  assert.match(a11yStyles, /translateX\(100%\)/);
+});
+
 test("rejects expired, tampered, and malformed operations sessions", () => {
   const realNow = Date.now;
   try {

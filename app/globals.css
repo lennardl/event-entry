@@ -13,6 +13,11 @@
   --amber: #b65d08;
   --blue: #1769aa;
   --shadow: 0 16px 42px rgba(23, 33, 58, 0.08);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-press: 140ms;
+  --duration-modal: 220ms;
   --font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono";
 }
 
@@ -30,14 +35,15 @@ body {
 }
 
 button, input, select { font: inherit; }
-button { cursor: pointer; }
+button { cursor: pointer; transition: transform var(--duration-press) var(--ease-out); }
+button:active:not(:disabled), a[role="button"]:active { transform: scale(.97); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid rgba(23, 105, 170, 0.35);
   outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition: none !important; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-property: color, background-color, border-color, opacity !important; transition-duration: 120ms !important; transform: none !important; }
 }
 
 .gate-screen { width: min(760px, calc(100% - 24px)); min-height: 100vh; margin: 0 auto; display: grid; align-content: start; gap: 18px; padding: clamp(20px,5vw,48px); background: white; box-shadow: var(--shadow); }.gate-screen > span { color: var(--red); font-size: 13px; font-weight: 900; letter-spacing: .1em; }.gate-screen h1 { margin: 0; font-size: clamp(32px,7vw,56px); }.gate-screen > p { margin: 0; color: var(--muted); font-size: 16px; }.gate-screen label { display: grid; gap: 8px; font-size: 16px; font-weight: 800; }.gate-screen input, .gate-screen select { min-height: 56px; padding: 14px; border: 2px solid var(--line); border-radius: 12px; font-size: 18px; }.gate-screen video { width: 100%; min-height: 220px; border-radius: 16px; background: #111a2e; object-fit: cover; }.gate-screen button { min-height: 64px; border: 0; border-radius: 12px; color: white; background: var(--green); font-size: 18px; font-weight: 900; }.gate-screen .gate-camera-button { background: var(--navy); }.gate-screen button:disabled { opacity: .6; }.gate-error { color: var(--red) !important; font-weight: 700; }.gate-result { padding: 24px; border-radius: 14px; font-size: 18px; }.gate-result strong { font-size: 22px; }.gate-result.allowed { color: #075f45; background: #eafaf4; }.gate-result.denied { color: #9f0d21; background: #fff0f2; }.gate-result p { margin-bottom: 0; }
