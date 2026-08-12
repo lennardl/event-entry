@@ -19,10 +19,10 @@ const roleSlugs: Record<Role, string> = { "Super Admin": "super", "Admin": "admi
 const slugRoles = Object.fromEntries(Object.entries(roleSlugs).map(([role, slug]) => [slug, role])) as Record<string, Role>;
 function configuredKeys(): Array<[Role, string]> { return [["Super Admin", process.env.APP_ACCESS_KEY], ["Admin", process.env.ADMIN_ACCESS_KEY], ["Gate Supervisor", process.env.GATE_SUPERVISOR_ACCESS_KEY], ["Command Centre Viewer", process.env.VIEWER_ACCESS_KEY]].filter((entry): entry is [Role, string] => Boolean(entry[1] && entry[1]!.length >= 32)); }
 
-export function sessionToken(role: Role = "Super Admin", email?: string) {
+export function sessionToken(role: Role = "Super Admin", email?: string, sessionVersion = 1) {
   const key = configuredSessionSecret();
   if (!key) return null;
-  const identity = email ? `.${Buffer.from(email.toLowerCase()).toString("base64url")}` : "";
+  const identity = email ? `.${Buffer.from(`${email.toLowerCase()}|${sessionVersion}`).toString("base64url")}` : "";
   const payload = `${Math.floor(Date.now() / 1000)}.${randomBytes(18).toString("base64url")}.${roleSlugs[role]}${identity}`;
   const signature = createHmac("sha256", key).update(`${SESSION_MESSAGE}.${payload}`).digest("base64url");
   return `${payload}.${signature}`;
@@ -63,6 +63,12 @@ export function authenticatedRole(request: Request): Role | null {
   const payload = `${issuedAtText}.${nonce}.${roleSlug}${identity ? `.${identity}` : ""}`;
   const expected = createHmac("sha256", key).update(`${SESSION_MESSAGE}.${payload}`).digest("base64url");
   return safeEqual(signature, expected) ? slugRoles[roleSlug] : null;
+}
+
+export function authenticatedIdentity(request: Request) {
+  const role = authenticatedRole(request); const token = sessionFromCookieHeader(request.headers.get("cookie"));
+  if (!role || !token) return null; const parts = token.split("."); if (parts.length !== 5) return { role, email: null, sessionVersion: null };
+  try { const [email, version] = Buffer.from(parts[3], "base64url").toString().split("|"); return email && /^\d+$/.test(version) ? { role, email, sessionVersion: Number(version) } : null; } catch { return null; }
 }
 
 export function isAuthenticatedRequest(request: Request) { return Boolean(authenticatedRole(request)); }

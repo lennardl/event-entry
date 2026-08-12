@@ -3,6 +3,7 @@ import { isSameOriginRequest, SESSION_COOKIE, sessionToken } from "../../../lib/
 import { createPostmanEmailProvider } from "../../../lib/email";
 import { isAllowedGovernmentEmail, normaliseEmail } from "../../../lib/auth-email";
 import { attachProviderMessage, consumeLoginCode, createLoginCode, revokeLoginCode } from "../../../lib/login-codes";
+import { recordLogin, resolveLoginUser } from "../../../lib/auth-users";
 
 const MAX_BODY_BYTES = 4096;
 const GENERIC_MESSAGE = "If that address is eligible, an 8-digit sign-in code is on its way.";
@@ -26,9 +27,12 @@ export async function POST(request: Request) {
   if (typeof body.code === "string") {
     const email = typeof body.email === "string" ? normaliseEmail(body.email) : "";
     const identity = await consumeLoginCode(email, body.code);
-    if (!identity) return NextResponse.json({ error: "The code is incorrect or has expired." }, { status: 401 });
-    const response = NextResponse.json({ ok: true, role: identity.role });
-    response.cookies.set(SESSION_COOKIE, sessionToken(identity.role, identity.email)!, {
+    if (!identity) { void recordLogin(email, false, "invalid_code").catch(() => undefined); return NextResponse.json({ error: "The code is incorrect or has expired." }, { status: 401 }); }
+    const user = await resolveLoginUser(identity.email);
+    if (!user.enabled) { void recordLogin(email, false, "disabled").catch(() => undefined); return NextResponse.json({ error: "This account is disabled." }, { status: 403 }); }
+    void recordLogin(email, true, "code_verified").catch(() => undefined);
+    const response = NextResponse.json({ ok: true, role: user.role });
+    response.cookies.set(SESSION_COOKIE, sessionToken(user.role, user.email, user.sessionVersion)!, {
       httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "strict", path: "/", maxAge: 8 * 60 * 60, priority: "high",
     });
     return response;

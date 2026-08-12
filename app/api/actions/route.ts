@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../db";
-import { authenticatedRole, isSameOriginRequest } from "../../../lib/auth";
+import { isSameOriginRequest } from "../../../lib/auth";
+import { authorizeRequest } from "../../../lib/auth-authorization";
+import { distributedRateLimit, requestClient } from "../../../lib/rate-limit";
 import { consumeTicket, createEvent, createGate, createGateAccessLink, createTicket, createZone, deleteGate, deleteZone, duplicateEvent, findTicketsByNric, importTickets, regenerateTicket, restoreEvent, revokeAllGateAccess, revokeGateAccessLink, setEventStatus, softDeleteEvent, updateEvent, updateGate, updateTicketPolicy, updateTicketTheme, updateZone } from "../../../lib/store";
 
 const eventIdSchema = z.string().trim().min(1).max(80).regex(/^evt-[a-zA-Z0-9-]+$/);
@@ -102,9 +104,11 @@ function json(data: unknown, init?: ResponseInit) {
 }
 
 export async function POST(request: Request) {
-  const role = authenticatedRole(request);
+  const role = (await authorizeRequest(request))?.role ?? null;
   if (!role) return json({ error: "Unauthorized" }, { status: 401 });
   if (!isSameOriginRequest(request)) return json({ error: "Invalid request origin" }, { status: 403 });
+  const mutationLimit = await distributedRateLimit("operations-mutation", requestClient(request), 120, 60);
+  if (!mutationLimit.allowed) return json({ error: "Too many requests" }, { status: 429, headers: { "retry-after": String(mutationLimit.retryAfter) } });
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > 1_000_000) return json({ error: "Request is too large" }, { status: 413 });
 

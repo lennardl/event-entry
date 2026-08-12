@@ -1,0 +1,30 @@
+name: Release gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=moderate
+      - name: Validate sequential migrations
+        run: node --input-type=module -e "import{readdirSync}from'node:fs';const f=readdirSync('drizzle').filter(x=>x.endsWith('.sql')).sort();f.forEach((x,i)=>{if(!x.startsWith(String(i).padStart(4,'0')))throw Error('Migration sequence: '+x)})"
+      - name: Reject committed credentials
+        run: git grep -nE 'lennard_v1_|BEGIN (RSA |EC )?PRIVATE KEY|POSTMAN_EMAIL_API_KEY=.{20}' -- ':!package-lock.json' && exit 1 || exit 0
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4

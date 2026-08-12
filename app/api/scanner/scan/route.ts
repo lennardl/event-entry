@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { DatabaseConfigurationError } from "../../../../db";
 import { consumeTicket, getGateAccess, markGateAccessUsed } from "../../../../lib/store";
+import { distributedRateLimit, requestClient } from "../../../../lib/rate-limit";
+import { recordOperationalEvent } from "../../../../lib/operations-monitor";
 
 const schema = z.object({ token: z.string().trim().min(16).max(256), quantity: z.number().int().min(1).max(6), requestId: z.string().uuid() });
 const MAX_BODY_BYTES = 2048;
@@ -13,6 +15,8 @@ function json(data: unknown, init?: ResponseInit) {
 
 export async function POST(request: Request) {
   try {
+    const rate = await distributedRateLimit("scanner", requestClient(request), 180, 60);
+    if (!rate.allowed) return json({ error: "Scanner is sending requests too quickly" }, { status: 429, headers: { "retry-after": String(rate.retryAfter) } });
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > MAX_BODY_BYTES) return json({ error: "Scanner request is too large" }, { status: 413 });
     const accessToken = request.headers.get("x-gate-access") ?? "";
@@ -29,6 +33,7 @@ export async function POST(request: Request) {
     await markGateAccessUsed(access.id).catch((error) => console.error("Could not update scanner last-used time", error));
     return json(result);
   } catch (error) {
+    void recordOperationalEvent("scanner", "critical", "Scanner request failed", { reason: error instanceof Error ? error.message : "unknown" }).catch(() => undefined);
     const databaseError = error instanceof DatabaseConfigurationError;
     return json({ error: databaseError ? error.message : "Scan failed" }, { status: databaseError ? 503 : 500 });
   }

@@ -1,8 +1,11 @@
 import { DatabaseConfigurationError } from "../../../../db";
 import { findEventById, findTicketByToken } from "../../../../lib/store";
+import { distributedRateLimit, requestClient } from "../../../../lib/rate-limit";
 
 export async function GET(_request: Request, context: { params: Promise<{ token: string }> }) {
   try {
+    const rate = await distributedRateLimit("public-ticket", requestClient(_request), 120, 60);
+    if (!rate.allowed) return Response.json({ error: "Too many requests" }, { status: 429, headers: { "retry-after": String(rate.retryAfter) } });
     const { token } = await context.params;
     if (token.length > 256) return Response.json({ error: "Ticket not found" }, { status: 404 });
     const ticket = await findTicketByToken(token);

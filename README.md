@@ -1,6 +1,6 @@
 # Event Entry
 
-A browser-based e-ticketing and gate-operations POC with ticket distribution,
+A browser-based e-ticketing and gate-operations application with ticket distribution,
 QR scanning, partial group admission, offline operation and a live dashboard.
 NDP 2027 is included as sample event data.
 
@@ -14,7 +14,7 @@ npm install
 npm run dev
 ```
 
-Set `DATABASE_URL`, `APP_ACCESS_KEY` and `NRIC_HASH_SECRET` in `.env.local`.
+Set `DATABASE_URL`, `AUTH_SESSION_SECRET`, `NRIC_HASH_SECRET` and `POSTMAN_EMAIL_API_KEY` in `.env.local`.
 The schema and sample data are created safely on first use.
 
 ## Vercel
@@ -25,15 +25,12 @@ deployment URL, then redeploy. Use long independent random values for both secre
 
 ## Production security boundary
 
-The bundled access-key login is suitable for a controlled pilot, where every signed-in
-operator is trusted as an administrator. The role switcher previews UI permissions; it
-is not a server-side identity or RBAC system.
+Government email one-time codes authenticate operators. Roles, disablement, session revocation and login history are stored in Postgres and enforced on protected APIs.
 
 Before a public or multi-operator production launch:
 
-- replace the shared key with an identity provider and enforce roles on every mutation;
-- put distributed login and API rate limiting at the edge (the built-in limiter is only
-  a single-instance backstop in serverless deployments);
+- review the operator allowlist and roles before each event;
+- retain edge/WAF limits in addition to the built-in Postgres-backed distributed limits;
 - keep `APP_ACCESS_KEY`, `NRIC_HASH_SECRET`, and `DATABASE_URL` independent and rotate
   them through the hosting platform rather than source control;
 - restrict database credentials to this application and enable provider audit logs;
@@ -46,3 +43,5 @@ Before a public or multi-operator production launch:
 npm run lint
 npm test
 ```
+
+See `docs/DEVICE_QA.md` for the mandatory device and accessibility release matrix. Apple Wallet requires an Apple Developer Pass Type ID/certificate exposed through the configured private signer. Google Wallet is intentionally deferred.

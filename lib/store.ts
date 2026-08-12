@@ -307,6 +307,10 @@ export async function findTicketByToken(token: string) {
   const rows = await getSql().query(`${TICKET_SELECT} WHERE t.token = $1 LIMIT 1`, [token]);
   return (rows as unknown as TicketRecord[])[0];
 }
+export async function findTicketById(id: string) {
+  await ensureSeeded(); const rows = await getSql().query(`${TICKET_SELECT} WHERE t.id = $1 LIMIT 1`, [id]);
+  return (rows as unknown as TicketRecord[])[0] ?? null;
+}
 
 export async function findEventById(eventId: string) {
   await ensureSeeded();

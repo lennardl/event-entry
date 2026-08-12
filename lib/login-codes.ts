@@ -32,6 +32,8 @@ function ensureSchema() {
     CONSTRAINT auth_magic_links_role_valid CHECK (role in ('Super Admin', 'Admin', 'Gate Supervisor', 'Command Centre Viewer'))
   )`,
   `ALTER TABLE auth_magic_links ADD COLUMN IF NOT EXISTS failed_attempts integer NOT NULL DEFAULT 0`,
+  `ALTER TABLE auth_magic_links ADD COLUMN IF NOT EXISTS provider_status text`,
+  `ALTER TABLE auth_magic_links ADD COLUMN IF NOT EXISTS provider_error text`,
   `DROP INDEX IF EXISTS auth_magic_links_token_hash_idx`,
   `CREATE INDEX IF NOT EXISTS auth_login_code_hash_idx ON auth_magic_links(token_hash)`,
   `CREATE INDEX IF NOT EXISTS auth_magic_links_email_created_idx ON auth_magic_links(email, created_at DESC)`,
@@ -74,6 +76,14 @@ export async function attachProviderMessage(id: string, messageId: string) {
 
 export async function revokeLoginCode(id: string) {
   await getSql()`UPDATE auth_magic_links SET consumed_at = now() WHERE id = ${id} AND consumed_at IS NULL`;
+}
+
+export async function pendingEmailDeliveries() {
+  await ensureSchema();
+  return getSql()`SELECT id, email, provider_message_id AS "messageId", provider_status AS status, provider_error AS error, created_at::text AS "createdAt" FROM auth_magic_links WHERE provider_message_id IS NOT NULL ORDER BY created_at DESC LIMIT 100`;
+}
+export async function updateEmailDelivery(id: string, status: string, error: string | null) {
+  await getSql()`UPDATE auth_magic_links SET provider_status = ${status}, provider_error = ${error} WHERE id = ${id}`;
 }
 
 export async function consumeLoginCode(emailValue: string, code: string): Promise<{ email: string; role: Role } | null> {

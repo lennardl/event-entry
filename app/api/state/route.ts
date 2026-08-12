@@ -1,9 +1,9 @@
 import { DatabaseConfigurationError } from "../../../db";
-import { authenticatedRole } from "../../../lib/auth";
+import { authorizeRequest } from "../../../lib/auth-authorization";
 import { getState } from "../../../lib/store";
 
 export async function GET(request: Request) {
-  const role = authenticatedRole(request);
+  const role = (await authorizeRequest(request))?.role ?? null;
   if (!role) return Response.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const eventId = new URL(request.url).searchParams.get("eventId") ?? undefined;

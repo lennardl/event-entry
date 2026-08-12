@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { headers } from "next/headers";
-import { authenticatedRole } from "../lib/auth";
+import { authorizeRequest } from "../lib/auth-authorization";
 import { getState } from "../lib/store";
 import { EventOperationsApp } from "./ui/EventOperationsApp";
 
@@ -16,9 +16,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
   let initialState = null;
   let initialError = null;
   try {
-    initialState = await getState(event);
     const requestHeaders = await headers();
-    initialState.role = authenticatedRole(new Request("http://localhost", { headers: requestHeaders })) ?? "Command Centre Viewer";
+    const identity = await authorizeRequest(new Request("http://localhost", { headers: requestHeaders }));
+    if (!identity) throw new Error("Unauthorized session");
+    initialState = await getState(event);
+    initialState.role = identity.role;
   } catch (error) {
     console.error("Initial operations render failed", error);
     initialError = "Could not load operations data";

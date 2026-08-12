@@ -1,12 +1,13 @@
 import { performance } from "node:perf_hooks";
-import { authenticatedRole } from "../../../lib/auth";
+import { authorizeRequest } from "../../../lib/auth-authorization";
 import { getSql } from "../../../db";
+import { recordOperationalEvent } from "../../../lib/operations-monitor";
 
 const DATABASE_TIMEOUT_MS = 5_000;
 const DEGRADED_AFTER_MS = 1_000;
 
 export async function GET(request: Request) {
-  if (!authenticatedRole(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!await authorizeRequest(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const startedAt = performance.now();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -24,6 +25,7 @@ export async function GET(request: Request) {
     }, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
     console.error("Database health check failed", error instanceof Error ? error.message : "Unknown error");
+    void recordOperationalEvent("database", "critical", "Database health check failed", { reason: error instanceof Error ? error.message : "unknown" }).catch(() => undefined);
     return Response.json({ status: "unavailable", checkedAt: new Date().toISOString(), latencyMs: null }, {
       status: 503,
       headers: { "cache-control": "private, no-store" },

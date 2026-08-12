@@ -67,7 +67,7 @@ test("event setup batches three and four enforce operational safety", async () =
   assert.match(storeSource, /pg_advisory_xact_lock/);
   assert.match(storeSource, /capacity_ok/);
   assert.match(scheduleMigration, /time_zone/);
-  assert.match(actionSource, /authenticatedRole/);
+  assert.match(actionSource, /authorizeRequest/);
   assert.match(actionSource, /expectedVersion/);
   assert.match(authSource, /roleSlugs/);
   assert.doesNotMatch(uiSource, /Demo role/);
@@ -143,7 +143,7 @@ test("sidebar database status is backed by an authenticated five-minute health c
   assert.doesNotMatch(uiSource, /Systems operational|Last checked just now/);
   assert.match(uiSource, /HEALTH_CHECK_INTERVAL_MS = 5 \* 60 \* 1000/);
   assert.match(uiSource, /visibilitychange/);
-  assert.match(healthSource, /authenticatedRole/);
+  assert.match(healthSource, /authorizeRequest/);
   assert.match(healthSource, /SELECT now\(\) AS checked_at/);
   assert.match(healthSource, /DATABASE_TIMEOUT_MS = 5_000/);
 });
@@ -263,4 +263,36 @@ test("operations controls refresh visibly, create single tickets, and preserve s
   assert.match(storeSource, /export async function createTicket/);
   assert.match(styles, /background-position:right 13px center/);
   assert.match(styles, /event-list>\.modal-actions/);
+});
+
+test("wallet previews use official artwork without exposing unfinished actions", async () => {
+  const [uiSource, ticketSource, googleBadge] = await Promise.all([
+    readFile("app/ui/EventOperationsApp.tsx", "utf8"),
+    readFile("app/ui/CitizenTicket.tsx", "utf8"),
+    readFile("public/wallet/add-to-google-wallet-en-sg.svg", "utf8"),
+  ]);
+  assert.match(uiSource, /add-to-google-wallet-en-sg\.svg/);
+  assert.match(uiSource, /Wallet passes are not working yet/);
+  assert.doesNotMatch(uiSource, /wallet-button apple/);
+  assert.doesNotMatch(uiSource, /href={`\/api\/wallet\//);
+  assert.match(ticketSource, /Apple Wallet and Google Wallet are not working yet/);
+  assert.match(googleBadge, /<svg/);
+});
+
+test("release controls cover distributed limits, monitoring, Apple Wallet, email delivery, sessions, QA and CI", async () => {
+  const [limits, monitor, apple, delivery, users, workflow, qa] = await Promise.all([
+    readFile("lib/rate-limit.ts", "utf8"), readFile("lib/operations-monitor.ts", "utf8"), readFile("app/api/wallet/apple/route.ts", "utf8"),
+    readFile("app/api/admin/email-delivery/route.ts", "utf8"), readFile("app/api/admin/users/route.ts", "utf8"),
+    readFile(".github/workflows/ci.yml", "utf8"), readFile("docs/DEVICE_QA.md", "utf8"),
+  ]);
+  assert.match(limits, /rate_limit_windows/);
+  assert.match(monitor, /OPERATIONS_ALERT_WEBHOOK_URL/);
+  assert.match(apple, /application\/vnd\.apple\.pkpass/);
+  assert.match(apple, /APPLE_WALLET_SIGNER_URL/);
+  assert.match(delivery, /getStatus/);
+  assert.match(users, /revokeSessions/);
+  assert.match(workflow, /npm audit --omit=dev/);
+  assert.match(workflow, /Reject committed credentials/);
+  assert.match(qa, /VoiceOver/);
+  assert.match(qa, /offline pack/);
 });
