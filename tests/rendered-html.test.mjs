@@ -286,6 +286,8 @@ test("release controls cover distributed limits, monitoring, Apple Wallet, email
     readFile(".github/workflows/ci.yml", "utf8"), readFile("docs/DEVICE_QA.md", "utf8"),
   ]);
   assert.match(limits, /rate_limit_windows/);
+  assert.doesNotMatch(limits, /\$4/);
+  assert.match(limits, /\[scope, keyHash\(`\$\{scope\}:\$\{identity\}`\), windowSeconds\]/);
   assert.match(monitor, /OPERATIONS_ALERT_WEBHOOK_URL/);
   assert.match(apple, /application\/vnd\.apple\.pkpass/);
   assert.match(apple, /APPLE_WALLET_SIGNER_URL/);

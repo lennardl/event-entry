@@ -21,14 +21,14 @@ export function requestClient(request: Request) {
 export async function distributedRateLimit(scope: string, identity: string, limit: number, windowSeconds: number) {
   await ensureSchema();
   const rows = await getSql().query(`WITH bucket AS (
-    SELECT to_timestamp(floor(extract(epoch FROM now()) / $4) * $4) AS starts
+    SELECT to_timestamp(floor(extract(epoch FROM now()) / $3) * $3) AS starts
   ), hit AS (
     INSERT INTO rate_limit_windows (scope, key_hash, window_start, count)
     SELECT $1, $2, starts, 1 FROM bucket
     ON CONFLICT (scope, key_hash, window_start) DO UPDATE SET count = rate_limit_windows.count + 1
     RETURNING count, window_start
-  ) SELECT count, extract(epoch FROM (window_start + ($4 || ' seconds')::interval - now()))::integer AS retry_after FROM hit`,
-  [scope, keyHash(`${scope}:${identity}`), limit, windowSeconds]) as Array<{ count: number; retry_after: number }>;
+  ) SELECT count, extract(epoch FROM (window_start + ($3 || ' seconds')::interval - now()))::integer AS retry_after FROM hit`,
+  [scope, keyHash(`${scope}:${identity}`), windowSeconds]) as Array<{ count: number; retry_after: number }>;
   if (Math.random() < .01) void getSql()`DELETE FROM rate_limit_windows WHERE window_start < now() - interval '1 day'`.catch(() => undefined);
   return rows[0]!.count > limit ? { allowed: false, retryAfter: Math.max(1, rows[0]!.retry_after) } : { allowed: true, retryAfter: 0 };
 }
