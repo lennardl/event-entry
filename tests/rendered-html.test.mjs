@@ -203,6 +203,19 @@ test("ticket themes are persisted, validated, and rendered on public tickets", a
   assert.match(citizenSource, /theme\.instructions/);
 });
 
+test("mobile tickets confirm admission within two seconds with prominent concise copy", async () => {
+  const [ticketSource, polishStyles] = await Promise.all([
+    readFile("app/ui/CitizenTicket.tsx", "utf8"),
+    readFile("app/ui/citizen-polish.css", "utf8"),
+  ]);
+  assert.match(ticketSource, /REFRESH_MS = 2_000/);
+  assert.match(ticketSource, /refreshingRef/);
+  assert.match(ticketSource, /Entry confirmed/);
+  assert.match(ticketSource, /All used/);
+  assert.match(polishStyles, /\.admission-notice strong \{ font-size: 20px/);
+  assert.match(polishStyles, /prefers-reduced-motion/);
+});
+
 test("database initialization and public ticket refresh avoid repeated full-state work", async () => {
   const [storeSource, ticketSource] = await Promise.all([
     readFile("lib/store.ts", "utf8"),
@@ -275,7 +288,7 @@ test("wallet previews use official artwork without exposing unfinished actions",
   assert.match(uiSource, /Wallet passes are not working yet/);
   assert.doesNotMatch(uiSource, /wallet-button apple/);
   assert.doesNotMatch(uiSource, /href={`\/api\/wallet\//);
-  assert.match(ticketSource, /Apple Wallet and Google Wallet are not working yet/);
+  assert.match(ticketSource, /Wallet passes unavailable/);
   assert.match(googleBadge, /<svg/);
 });
 

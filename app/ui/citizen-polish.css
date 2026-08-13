@@ -1,0 +1,47 @@
+.admission-notice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 2px solid #9ce3ca;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(7, 95, 69, .12);
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.admission-notice > span {
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: white;
+  background: #07865f;
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.admission-notice > div { display: grid; gap: 2px; }
+.admission-notice strong { font-size: 20px; line-height: 1.1; }
+.admission-notice div span { color: #075f45; font-size: 25px; font-weight: 900; line-height: 1.1; }
+.ticket-state, .wallet-unavailable { padding: 14px 16px; font-size: 17px; font-weight: 850; }
+.wallet-unavailable { gap: 3px; color: #344054; font-size: 15px; }
+.wallet-unavailable span { font-size: 14px; font-weight: 550; }
+.mobile-count { gap: 8px; padding: 10px 8px; }
+.mobile-count strong { font-size: 36px; line-height: 1; }
+.mobile-count span { color: #475467; font-size: 15px; font-weight: 750; }
+
+@media (prefers-reduced-motion: reduce) {
+  .admission-notice {
+    transform: none;
+    transition: opacity 180ms var(--ease-out);
+
+    @starting-style { opacity: 0; transform: none; }
+  }
+}
