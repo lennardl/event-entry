@@ -203,12 +203,12 @@ test("ticket themes are persisted, validated, and rendered on public tickets", a
   assert.match(citizenSource, /theme\.instructions/);
 });
 
-test("mobile tickets confirm admission within two seconds with prominent concise copy", async () => {
+test("mobile tickets poll every five seconds with prominent concise confirmation copy", async () => {
   const [ticketSource, polishStyles] = await Promise.all([
     readFile("app/ui/CitizenTicket.tsx", "utf8"),
     readFile("app/ui/citizen-polish.css", "utf8"),
   ]);
-  assert.match(ticketSource, /REFRESH_MS = 2_000/);
+  assert.match(ticketSource, /REFRESH_MS = 5_000/);
   assert.match(ticketSource, /refreshingRef/);
   assert.match(ticketSource, /Entry confirmed/);
   assert.match(ticketSource, /All used/);

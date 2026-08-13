@@ -9,7 +9,7 @@ import { useQrCode } from "./useQrCode";
 
 type Ticket = { id: string; zoneName: string; zoneColour: string; maxEntries: number; remainingEntries: number; version: number; token: string };
 type TicketResponse = { ticket: Ticket; event: EventRecord };
-const REFRESH_MS = 2_000;
+const REFRESH_MS = 5_000;
 const load = async (token: string): Promise<TicketResponse> => { const response = await fetch(`/api/ticket/${encodeURIComponent(token)}`, { cache: "no-store" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); return data; };
 
 export function CitizenTicket({ token }: { token: string }) {
